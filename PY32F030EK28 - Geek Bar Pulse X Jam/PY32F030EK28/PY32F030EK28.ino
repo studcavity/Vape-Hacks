@@ -627,6 +627,7 @@ void setup() {
     digitalWrite(PA15, LOW);
 
     analogReadResolution(12);
+    pinMode(PA2, INPUT_ANALOG);   // Not explicitely needed as arduino core takes over when reading
     pinMode(PF0, INPUT_PULLUP);   // USB sense: LP4068 PG or VBUS
     pinMode(PB5, INPUT_PULLUP);   // LP4068 CHRG: active-low when charging (unconfirmed)
 
