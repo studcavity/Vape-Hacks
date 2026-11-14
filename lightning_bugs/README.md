@@ -44,9 +44,85 @@ In practice: at 120 BPM, 1% error is 5 ms per beat, so two devices can drift a f
 - **Regular resync** to correct the remainder: a wired pulse, a serial message, or an added wireless input (IR receiver or light sensor on a spare pin, read via timer input capture).
 - **Schedule against absolute times, not `delay()`.** The current animations chain `delay(stepMs)` calls, so error accumulates every step. For synced effects, compute `nextBeat = epoch + n * period` (corrected by the per-unit rate) and wait until `(int32_t)(millis() - nextBeat) >= 0`. The existing firmware already uses this pattern for its hold timers.
 
-## Proposed plan
+## Layout
 
-1. Add a RAM "sync block" to the firmware: epoch, period (µs), rate correction (ppm).
-2. Write a host-side pyocd script that measures offset and drift, then writes the sync block.
-3. Rework the animation loop to run on scheduled beats instead of `delay()`.
-4. Later, if devices must stay locked unplugged for long sessions, add a pulse input (IR or wired) handled by timer input capture.
+```
+lightning_bugs/
+├── host/
+│   ├── lb_sync.py          pyocd sync tool (list / sync / status / hold / release)
+│   └── test_lb_sync.py     simulated-device tests (no hardware needed)
+└── firmware/lightning_bugs/
+    ├── lb_sync.h           sync block, master clock, beat grid, boot guard
+    ├── lightning_bugs.ino  example: beat-synced LED patterns
+    └── matrix_map.h        LED map (copied from the main firmware)
+```
+
+## How sync works
+
+1. The firmware keeps a small **sync block** in RAM, tagged with a magic number. `lb_sync.py` attaches over SWD in `attach` mode (no halt, no reset, `auto_unlock` off so it can never mass-erase) and finds the block by scanning RAM, so its address can change between builds.
+2. `sync` reads the chip's `millis()` counter (`uwTick`) every 5 s for 10 min. Each sample is the fastest of 8 reads, timestamped at the midpoint of the round trip. A least-squares fit gives the chip's clock rate against the host's.
+3. The host writes back an **anchor** (local tick ↔ Unix µs), a **rate correction** in parts per billion, and the **beat grid** (epoch + period). A sequence counter keeps the firmware from adopting a half-written block, and the firmware acknowledges the new sync.
+4. The firmware computes master time from `millis()` using the same integer formula the host uses to check it:
+   `master_us = anchor_us + L*1000 + L*corr_ppb/1e6`, with `L = millis() − anchor_tick`.
+5. Effects are **scheduled against absolute beat times** (`lbWaitUntil(lbBeatTime(n))`), never chained `delay()`s. Each beat's pattern is computed from the beat number alone, so every device shows the same thing at the same moment.
+
+Beat `n` falls at Unix time `epoch + n × period`. Every device synced against an NTP-disciplined computer shares that timeline, so you can sync devices **one at a time with a single probe**, even on different days, as long as `--bpm` and `--epoch` match.
+
+## Usage
+
+```sh
+pip install pyocd                       # plus the Puya pack that provides py32f030x8
+python3 host/lb_sync.py list            # find your probe ID
+python3 host/lb_sync.py -u <probe> sync --bpm 120
+python3 host/lb_sync.py -u <probe> status
+```
+
+Recommended workflow for the 4–6 hour target:
+
+1. `sync` (10 min). Run it **on battery, at the temperature the device will be used at**. If you can, wire only SWDIO/SWCLK/GND so USB VBUS isn't powering the board: the internal oscillator shifts with supply voltage.
+2. Unplug and leave the device running in deployment-like conditions for a few hours.
+3. Plug back in and run `sync --refine`. It prints how far the device drifted, then re-measures the rate using the whole period since the last sync as its baseline. That is far more precise than a 10-minute window, and it captures the device's real operating conditions.
+4. Run `status` at any time to see the current offset in ms. Checking it at the end of a session is the only real measure of how well sync held up.
+
+### Boot guard
+
+`lbBootGuard()` parks the firmware for 3 s at power-up (a single halo LED spins). **Anything that could cut off SWD, such as remapping PA13/PA14, STOP mode or clock changes, must run after it.** To recover a device whose firmware breaks SWD:
+
+```sh
+python3 host/lb_sync.py -u <probe> hold --wait 60   # then power-cycle the device
+python3 host/lb_sync.py -u <probe> hold --reset     # if SWD still works: reset into the guard
+# device sits in the guard (center LEDs lit) → reflash with pyocd as usual
+python3 host/lb_sync.py -u <probe> release
+```
+
+Power-cycling means disconnecting the battery, since the slide switch doesn't cut power to the MCU.
+
+## What accuracy to expect (read this)
+
+The PY32 has no crystal, so the clock is an RC oscillator (HSI). Calibration removes its **fixed** error. Over 4–6 hours, what's left is how much the oscillator **changes**:
+
+| Source of error | Typical size | Drift over 6 h |
+|---|---|---|
+| Measurement (10-min `sync`) | ~0.2 ppm | ~5 ms (simulated) |
+| Measurement (`--refine` after 3 h) | ~0.2 ppm | ~5 ms |
+| Temperature change of a few °C | likely tens to hundreds of ppm* | ~0.2 s to several s |
+| Battery voltage sagging over the session | likely tens of ppm* | ~0.1 to 1 s |
+
+\* These are estimates from typical internal-RC behavior, not measured on this chip. Check against the datasheet and against `status` results.
+
+So **"roughly in sync" (within a fraction of a second) for 4–6 h unplugged is plausible if temperature is stable**, such as devices sitting indoors. It is not plausible if some are in pockets and others on a table. If `status` shows drift is too large, the next steps are, in order:
+
+1. Calibrate under the real conditions (`--refine`, as above).
+2. Add a periodic resync input (IR or light sensor on a spare pin, read by timer input capture), which corrects drift continuously.
+3. Fit a 32.768 kHz crystal (LSE). This needs a board with the pads and the right pins free; a ±20 ppm crystal still drifts about 0.4 s in 6 h before calibration.
+
+## Status
+
+- [x] Firmware sync block, master clock, beat grid, boot guard (`lb_sync.h`)
+- [x] Host sync tool with offset/rate measurement, `--refine`, `status`, `hold`/`release`
+- [x] Example beat-synced sketch
+- [x] Host logic tested against a simulated device (`python3 -m unittest host/test_lb_sync.py`)
+- [ ] **Not yet compiled or run on hardware.** Check that `uwTick` is the counter behind `millis()` in the py32duino core (the tool refuses to sync if the counter isn't ~1 kHz) and that the build fits.
+- [ ] Measure real drift over 4–6 h with `status`, and replace the estimates above with measured numbers
+- [ ] Optional: store the rate correction in flash so it survives a reboot
+- [ ] Optional: hardware resync input
