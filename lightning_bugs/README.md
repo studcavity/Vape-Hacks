@@ -68,6 +68,19 @@ lightning_bugs/
 
 Beat `n` falls at Unix time `epoch + n × period`. Every device synced against an NTP-disciplined computer shares that timeline, so you can sync devices **one at a time with a single probe**, even on different days, as long as `--bpm` and `--epoch` match.
 
+## Build and flash wrapper
+
+`tools/lb_flash.py` implements step 3 of `assessments/swd-recovery.md`. Needs `arduino-cli` (with the py32duino core) and `pyocd`.
+
+```sh
+python3 tools/lb_flash.py check                          # source safety scan only
+python3 tools/lb_flash.py [--fqbn <board>] build         # check + compile + binary check
+python3 tools/lb_flash.py -u <probe> flash --canary      # flash a canary unit, verify SWD
+python3 tools/lb_flash.py -u <probe> flash               # sealed unit: only canary-tested builds
+```
+
+It refuses to build if the sketch mentions PA13/PA14, raw GPIOA mode/AF writes, STOP/STANDBY, deep-sleep bits, flash/option-byte access, RCC clock changes or DBGMCU (waive one line with `// lb-allow-swd-risk`). After building it checks the ELF for forbidden HAL symbols and the `.bin` for flash-unlock keys. After flashing it resets the chip and confirms it can reattach over SWD in the guard, after the guard, and 30 s later. The `--canary` flag is your declaration that the unit is recoverable; builds that pass are recorded by hash in `.lb_canary.json` (git-ignored). The default `--fqbn` is a guess; find yours with `arduino-cli board listall py32`.
+
 ## Usage
 
 ```sh
