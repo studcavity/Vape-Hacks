@@ -2,3 +2,5 @@
 pytest>=8
 pyyaml>=6
 pyflakes>=3
+# FT232R probe plugin and its simulated-hardware tests (pulls in pyocd and pyftdi)
+-e lightning_bugs/probes/ft232r

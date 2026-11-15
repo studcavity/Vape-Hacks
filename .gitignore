@@ -28,3 +28,8 @@ build/
 # only copy of code we don't have, so they stay trackable (ask the user first).
 *.bin
 !backup_flash*.bin
+
+# Python packaging output
+*.egg-info/
+build/
+dist/

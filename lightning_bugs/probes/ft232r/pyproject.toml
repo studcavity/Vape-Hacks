@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pyocd-ft232r"
+version = "0.1.0"
+description = "pyOCD debug probe plugin: SWD over an FTDI FT232R (UART adaptor) in synchronous bit-bang mode"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = ["pyocd>=0.36", "pyftdi>=0.55"]
+
+[project.entry-points."pyocd.probe"]
+ft232r = "pyocd_ft232r.probe:FT232RProbePlugin"
+
+[tool.setuptools]
+packages = ["pyocd_ft232r"]
