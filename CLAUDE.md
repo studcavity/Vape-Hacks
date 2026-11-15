@@ -42,7 +42,7 @@ Tests live in the repo and run in CI (`.github/workflows/ci.yml`). Use a venv:
 
     python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
     .venv/bin/python -m pytest                 # everything
-    .venv/bin/python -m pyflakes lightning_bugs tests && shellcheck lightning_bugs/tools/setup.sh
+    .venv/bin/python -m pyflakes $(git ls-files '*.py') && shellcheck lightning_bugs/tools/setup.sh
 
 - `lightning_bugs/host/test_lb_sync.py`: simulated-device sync tests (no hardware).
 - `lightning_bugs/tests/`: unit tests for `lb_flash.py` safety rules and `lb_sync.py` helpers.

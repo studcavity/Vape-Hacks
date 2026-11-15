@@ -25,10 +25,12 @@ Skip the tests that drive real `git`/`bash` processes with `-m "not integration"
 Lint, as CI does (`shellcheck` comes from your package manager, e.g. `apt install shellcheck`):
 
 ```sh
-.venv/bin/python -m pyflakes lightning_bugs tests
+.venv/bin/python -m pyflakes $(git ls-files '*.py')
 shellcheck lightning_bugs/tools/setup.sh
 ```
 
-CI (`.github/workflows/ci.yml`) runs lint, the unit tests on Python 3.10 and 3.12, the repo checks, and the integration tests on every push.
+Lint takes the file list from `git ls-files` because `setup.sh` creates `lightning_bugs/.venv`, which pyflakes would otherwise scan.
+
+CI (`.github/workflows/ci.yml`) runs everything on Ubuntu 24.04 and 26.04 runners: lint, the unit tests on Python 3.10, 3.12 and 3.14 (3.14 only on 26.04, 3.10 only on 24.04), the repo checks, the integration tests and the FT232R plugin tests, on every push.
 
 Not covered: anything that needs a real probe or device. Flashing is still a manual step and must go through a canary unit first (see `lightning_bugs/README.md`). One test, `test_real_script_refuses_outside_sandbox`, is skipped inside a claude_sandbox container and runs elsewhere.
