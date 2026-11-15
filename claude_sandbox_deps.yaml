@@ -10,18 +10,12 @@ apt:
   - python3-venv      # setup.sh creates lightning_bugs/.venv for pyocd
   - libusb-1.0-0      # pyocd's USB probe access (Pico/CMSIS-DAP)
 
-# Installed via the official install.sh (pinned to the 0.33.0 tag, sha256 of the
-# script) instead of `binaries:`: the launcher's binaries step failed with
-# "install: cannot open '/dev/stdin' for reading: Permission denied".
-# 0.33.0 is the version py32duino's own CI uses. The script does not itself
-# verify the tarball checksum; it downloads from the project's GitHub releases.
-scripts:
-  - name: arduino-cli
-    url: https://raw.githubusercontent.com/arduino/arduino-cli/0.33.0/install.sh
-    sha256: 255c3328df2257ff0ef612af167e59186af8a3d18a2c231e4030b53bc8ea47ee
-    args: ["0.33.0"]
-    env: {BINDIR: /usr/local/bin}
+# arduino-cli is intentionally NOT listed: the launcher's put_file() runs
+# `install ... /dev/stdin`, which fails in the container with "Permission denied"
+# and is used by both `binaries:` and `scripts:`. lightning_bugs/tools/setup.sh
+# installs the pinned, checksum-verified arduino-cli to ~/.local/bin instead.
+# Restore a `binaries:` entry once the launcher is fixed.
 
-last_generated: "2026-11-15T00:49:55Z"
+last_generated: "2026-11-15T00:53:30Z"
 platform: |
   Ubuntu 24.04.5 LTS (noble), x86_64
