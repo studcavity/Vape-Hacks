@@ -83,6 +83,21 @@ python3 tools/lb_flash.py -u <probe> flash               # sealed unit: only can
 
 It refuses to build if the sketch mentions PA13/PA14, raw GPIOA mode/AF writes, STOP/STANDBY, deep-sleep bits, flash/option-byte access, RCC clock changes or DBGMCU (waive one line with `// lb-allow-swd-risk`). After building it checks the ELF for forbidden HAL symbols and the `.bin` for flash-unlock keys. After flashing it resets the chip and confirms it can reattach over SWD in the guard, after the guard, and 30 s later. The `--canary` flag is your declaration that the unit is recoverable; builds that pass are recorded by hash in `.lb_canary.json` (git-ignored). The default `--fqbn` is `PY32Duino:PY32:GenF030:pnum=PY32F030x8`.
 
+## Debug probes (two supported stacks)
+
+Both stacks are supported for now, and every change is made for both (see "Probe parity" in the repo's `CLAUDE.md`):
+
+| | A: Raspberry Pi Pico | B: FTDI FT232R |
+|---|---|---|
+| Hardware | Pico with debug-probe (CMSIS-DAP) firmware, USB `2e8a:000c` | FT232R USB-UART board, USB `0403:6001`, plus a ~470 ohm resistor |
+| Driver | pyocd built-in | `probes/ft232r` plugin (installed by `tools/setup.sh`) |
+| Select | `--probe <id>` or let pyocd pick the only probe | `--probe ft232r:` (opt-in, never auto-picked) |
+| Speed | USB CMSIS-DAP | slower: bit-bang, 1 USB round trip per batch |
+| Status | used for the original work | simulated only; not yet tried on hardware |
+
+`lb_flash.py` and `lb_sync.py` do not know which one is attached. Wiring, options and the hardware
+bring-up checklist for B are in `probes/ft232r/README.md`.
+
 ## Usage
 
 ```sh

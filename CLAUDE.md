@@ -19,6 +19,23 @@ Only commit a compiled binary if one of these is true:
 
 If a build produces binaries inside the tree, add them to `.gitignore` instead of committing them.
 
+## Probe parity (two supported stacks)
+
+The Lightning Bugs host tools support **two debug-probe stacks, and both are considered supported for now**:
+
+- **Stack A, Raspberry Pi Pico** running debug-probe (CMSIS-DAP) firmware, via pyocd's built-in drivers
+  (USB `2e8a:000c`).
+- **Stack B, FTDI FT232R** USB-UART adaptor, via the plugin in `lightning_bugs/probes/ft232r/`
+  (USB `0403:6001`; select with `--probe ft232r:`).
+
+**Always implement changes for both to keep parity.** That covers `lb_flash.py` / `lb_sync.py`, `setup.sh`,
+`claude_sandbox_deps.yaml` and any USB passthrough or sandbox configuration, tests, CI and docs. If you
+change something for one stack, either do the same for the other in the same change or say explicitly why
+it cannot be done and record the gap in `lightning_bugs/probes/ft232r/README.md`. Keep `lb_flash.py` and
+`lb_sync.py` probe-agnostic (they talk only to pyocd; the probe is chosen with `--probe`); put probe-specific
+code in the probe's own package. `tests/test_probe_parity.py` guards some of this. Remove this section only
+when the user says one stack is retired.
+
 ## Tests
 
 Tests live in the repo and run in CI (`.github/workflows/ci.yml`). Use a venv:
@@ -30,5 +47,6 @@ Tests live in the repo and run in CI (`.github/workflows/ci.yml`). Use a venv:
 - `lightning_bugs/host/test_lb_sync.py`: simulated-device sync tests (no hardware).
 - `lightning_bugs/tests/`: unit tests for `lb_flash.py` safety rules and `lb_sync.py` helpers.
 - `lightning_bugs/tests/test_lb_flash_integration.py`: drives `lb_flash.py` against fake `arduino-cli`/`pyocd`.
+- `lightning_bugs/tests/ft232r/`: the FT232R plugin against a pin-level simulated SW-DP (wire, transport, SWD, probe, pyocd `DebugPort`, `lb_sync`).
 - `tests/`: repo hygiene (`.gitignore`, `claude_sandbox_deps.yaml`, `setup.sh` guard).
 - Nothing here touches real hardware; flashing a device is still a manual, canary-first step.
