@@ -5,13 +5,43 @@ Self-contained: paste everything below the line into a Claude Code session in th
 
 ---
 
+> ## Status: implemented in `claude_sandbox` (checked against its commit `09058a4`)
+>
+> This plan was written first; the launcher now has USB passthrough, and **the body below is the
+> original design, kept for history.** Where it differs, the launcher's behaviour wins:
+>
+> | Plan said | The launcher does |
+> |---|---|
+> | requests in `usb:` of `claude_sandbox_deps.yaml` | requests live in a **separate `claude_sandbox_host.yaml`** (default branch, fetched via the GitHub API, 404 = none). The deps schema has **no `usb` key**: putting one there aborts the launch. |
+> | `--allow-usb` approves the yaml's requests | no such flag. Approval is `--usb VID:PID`, an **interactive per-device prompt** (only when stdin is a TTY; otherwise "requested but not approved"), or the allowlist. |
+> | allowlist: one `vid:pid` per line | lines of `VID:PID [owner/repo]`; the optional repo scopes the approval. The file must be owned by you and not group/world-writable. `--usb-allow PATH` overrides `~/.config/claude_sandbox/usb_allow`. |
+> | `--no-usb` | same: attaches nothing. |
+> | attach before `install_deps` | attach **after** `install_deps`, so installers never run with hardware present, and before any credential exists. `setup:` scripts do run with the device attached. |
+> | `description` limited and escaped | strict allowlist regex `[A-Za-z0-9 .,()_/+:'-]{1,200}` (no backticks, `$`, `#`, `<`, `;`, newlines). |
+> | `usb` excluded from the image cache key | the host file is never read by the image code, so it cannot change a cache key. |
+>
+> The same launcher change defaults the base image to `images:ubuntu/26.04`, fixed `put_file` so
+> `install ... /dev/stdin` is no longer needed (`binaries:` and `scripts:` entries work again), and
+> lets a repo pin `image:` in the deps file.
+>
+> **Two probes, not one.** Vape-Hacks supports two debug-probe stacks (its `CLAUDE.md`, "Probe parity"):
+> Pico `2e8a:000c` and FTDI FT232R `0403:6001`. Its `claude_sandbox_host.yaml` requests both, and
+> `tests/test_sandbox_host.py` keeps them in step. The FT232R has two properties the Pico does not:
+> `0403:6001` is the generic ID of *every* FT232R serial adaptor, and the launcher attaches every host
+> device with an approved ID (so approving it exposes all of them); and the host's `ftdi_sio` driver
+> normally owns the adaptor as `/dev/ttyUSB*` (whether the sandbox can claim it is unverified, see
+> `USB_TEST_PLAN.md`). Hardware testing: `USB_TEST_PLAN.md`.
+
+---
+
 ## Task: add opt-in USB passthrough, declared by flag or in `claude_sandbox_deps.yaml`, with self-discovery in the sandbox's CLAUDE.md
 
 ### Why
 Sandboxed sessions can't reach USB hardware: `/dev/bus/usb` doesn't exist in the
 container. The first use case is the Vape-Hacks `lightning_bugs` project, which
-flashes and syncs PY32F030 chips over SWD with `pyocd` through a Raspberry Pi
-Pico debug probe (CMSIS-DAP, USB 2e8a:000c). Without passthrough the session can
+flashes and syncs PY32F030 chips over SWD with `pyocd` through a debug probe: a Raspberry Pi
+Pico (CMSIS-DAP, USB 2e8a:000c) or an FTDI FT232R adaptor driven by the repo's own pyocd plugin
+(USB 0403:6001). Both are supported and both need passthrough. Without passthrough the session can
 only run simulated tests. Separately, a session shouldn't have to guess what it
 was given: the sandbox CLAUDE.md should say which devices were attached, how, and
 how to check.
