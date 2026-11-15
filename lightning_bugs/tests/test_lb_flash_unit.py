@@ -136,3 +136,33 @@ def test_load_canary_reads_record(tmp_path, monkeypatch):
     p.write_text('{"abc": {"bin": "x.bin"}}')
     monkeypatch.setattr(lb_flash, "CANARY_FILE", p)
     assert lb_flash.load_canary() == {"abc": {"bin": "x.bin"}}
+
+
+# ─── where the toolchain lives ───────────────────────────────────────────────
+def test_arduino_data_dir_defaults_to_home(monkeypatch, tmp_path):
+    monkeypatch.delenv("ARDUINO_DIRECTORIES_DATA", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert lb_flash.arduino_data_dir() == tmp_path / ".arduino15"
+
+
+def test_arduino_data_dir_honours_the_environment(monkeypatch, tmp_path):
+    monkeypatch.setenv("ARDUINO_DIRECTORIES_DATA", str(tmp_path / "elsewhere"))
+    assert lb_flash.arduino_data_dir() == tmp_path / "elsewhere"
+
+
+def test_binary_symbol_check_finds_nm_in_a_relocated_data_dir(monkeypatch, tmp_path, capsys):
+    """setup.sh --i-know-this-modifies-my-system keeps the toolchain outside ~/.arduino15. If check_binary
+    failed to find nm there it would only warn and skip the forbidden-symbol check, so prove it is found
+    and used."""
+    nm = tmp_path / "data" / "packages" / "x" / "tools" / "gcc" / "1" / "bin" / "arm-none-eabi-nm"
+    nm.parent.mkdir(parents=True)
+    nm.write_text("#!/bin/sh\necho '08000000 T HAL_PWR_EnterSTOPMode'\n")
+    nm.chmod(0o755)
+    elf, binf = tmp_path / "x.elf", tmp_path / "x.bin"
+    elf.write_bytes(b"\x7fELF")
+    binf.write_bytes(bytes.fromhex("00010203"))
+    monkeypatch.setattr(lb_flash.shutil, "which", lambda name: None)
+    monkeypatch.setenv("ARDUINO_DIRECTORIES_DATA", str(tmp_path / "data"))
+    problems = lb_flash.check_binary(elf, binf)
+    assert any("HAL_PWR_EnterSTOPMode" in p for p in problems), problems
+    assert "not found" not in capsys.readouterr().err

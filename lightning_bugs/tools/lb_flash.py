@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -100,11 +101,18 @@ def check_source() -> list[str]:
     return problems
 
 
+def arduino_data_dir() -> Path:
+    """Where arduino-cli keeps cores and toolchains: $ARDUINO_DIRECTORIES_DATA (which arduino-cli itself
+    honours, and which `setup.sh --i-know-this-modifies-my-system` points inside the repo), else ~/.arduino15."""
+    env = os.environ.get("ARDUINO_DIRECTORIES_DATA")
+    return Path(env) if env else Path.home() / ".arduino15"
+
+
 def check_binary(elf: Path | None, binf: Path) -> list[str]:
     problems = []
     if elf and elf.exists():
         nm = shutil.which("arm-none-eabi-nm") or next(
-            iter(sorted(Path.home().glob(".arduino15/packages/**/arm-none-eabi-nm"))), None)
+            iter(sorted(arduino_data_dir().glob("packages/**/arm-none-eabi-nm"))), None)
         if nm:
             out = subprocess.run([str(nm), str(elf)], capture_output=True, text=True).stdout
             for line in out.splitlines():
