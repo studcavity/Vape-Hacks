@@ -49,10 +49,15 @@ arduino-cli config init --overwrite >/dev/null 2>&1 || true
 arduino-cli core update-index --additional-urls "$INDEX_URL"
 arduino-cli core install "$CORE" --additional-urls "$INDEX_URL"
 
+# pyocd and pyftdi are pinned in constraints.txt (shared with CI); re-applied on every run so an
+# older venv moves to the pinned versions when the pin changes.
+PIP_CONSTRAINT="$ROOT/constraints.txt"
+export PIP_CONSTRAINT
 if [ ! -x "$ROOT/.venv/bin/pyocd" ]; then
   python3 -m venv "$ROOT/.venv"
-  "$ROOT/.venv/bin/pip" install -q --upgrade pip pyocd
+  "$ROOT/.venv/bin/pip" install -q --upgrade pip
 fi
+"$ROOT/.venv/bin/pip" install -q pyocd                         # stack A needs only pyocd
 # Second supported probe stack: FT232R bit-bang plugin (probes/ft232r). Both stacks stay supported;
 # see "Probe parity" in CLAUDE.md. Editable, so edits to the plugin take effect without reinstalling.
 "$ROOT/.venv/bin/pip" install -q -e "$ROOT/probes/ft232r"

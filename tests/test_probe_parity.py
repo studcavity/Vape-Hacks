@@ -39,8 +39,9 @@ def test_shared_tools_stay_probe_agnostic(repo, rel):
 
 def test_setup_script_installs_both_stacks(repo):
     text = read(repo, "lightning_bugs/tools/setup.sh")
-    assert "pip\" install -q --upgrade pip pyocd" in text          # stack A needs only pyocd
+    assert 'pip" install -q pyocd' in text                          # stack A needs only pyocd
     assert 'install -q -e "$ROOT/probes/ft232r"' in text           # stack B
+    assert 'PIP_CONSTRAINT="$ROOT/constraints.txt"' in text         # both installs use the pins
 
 
 def test_dev_requirements_install_the_plugin(repo):
@@ -57,3 +58,33 @@ def test_libusb_is_available_to_both_stacks(repo):
 def test_plugin_has_its_own_tests(repo):
     tests = list((repo / "lightning_bugs/tests/ft232r").glob("test_*.py"))
     assert len(tests) >= 5
+
+
+def _pins(repo):
+    pins = {}
+    for line in read(repo, "lightning_bugs/constraints.txt").splitlines():
+        line = line.split("#")[0].strip()
+        if line:
+            name, _, ver = line.partition("==")
+            assert ver, f"{line!r} is not an exact == pin"
+            pins[name.strip().lower()] = ver.strip()
+    return pins
+
+
+def test_probe_libraries_are_pinned_exactly(repo):
+    """pyocd (both stacks) and pyftdi (stack B) are pinned in one file shared by setup.sh and CI."""
+    assert set(_pins(repo)) == {"pyocd", "pyftdi"}
+    assert "-c lightning_bugs/constraints.txt" in read(repo, "requirements-dev.txt")
+
+
+def test_plugin_ranges_admit_the_pins(repo):
+    """The plugin's own loose ranges must not exclude the pinned versions."""
+    import re
+    from packaging.specifiers import SpecifierSet
+    from packaging.version import Version
+    toml = read(repo, "lightning_bugs/probes/ft232r/pyproject.toml")
+    deps = re.search(r"dependencies\s*=\s*\[(.*?)\]", toml, re.S).group(1)
+    for name, ver in _pins(repo).items():
+        m = re.search(rf'"{name}([^"]*)"', deps)
+        assert m, f"plugin does not depend on {name}"
+        assert Version(ver) in SpecifierSet(m.group(1)), f"pin {name}=={ver} outside plugin range {m.group(1)}"

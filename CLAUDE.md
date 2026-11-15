@@ -33,7 +33,8 @@ The Lightning Bugs host tools support **two debug-probe stacks, and both are con
 change something for one stack, either do the same for the other in the same change or say explicitly why
 it cannot be done and record the gap in `lightning_bugs/probes/ft232r/README.md`. Keep `lb_flash.py` and
 `lb_sync.py` probe-agnostic (they talk only to pyocd; the probe is chosen with `--probe`); put probe-specific
-code in the probe's own package. `tests/test_probe_parity.py` guards some of this. Remove this section only
+code in the probe's own package. `tests/test_probe_parity.py` guards some of this. `pyocd` and `pyftdi` are pinned exactly in `lightning_bugs/constraints.txt` (used by `setup.sh` and
+`requirements-dev.txt`); bump them there, once, and run the whole suite. Remove this section only
 when the user says one stack is retired.
 
 ## Tests
