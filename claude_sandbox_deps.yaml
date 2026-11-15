@@ -9,6 +9,7 @@
 apt:
   - python3-venv      # setup.sh creates lightning_bugs/.venv for pyocd
   - libusb-1.0-0      # pyocd's USB probe access (Pico/CMSIS-DAP)
+  - usbutils          # lsusb, to check which host USB devices the sandbox sees
 
 # arduino-cli is intentionally NOT listed: the launcher's put_file() runs
 # `install ... /dev/stdin`, which fails in the container with "Permission denied"
@@ -16,6 +17,6 @@ apt:
 # installs the pinned, checksum-verified arduino-cli to ~/.local/bin instead.
 # Restore a `binaries:` entry once the launcher is fixed.
 
-last_generated: "2026-11-15T00:53:30Z"
+last_generated: "2026-11-15T01:55:38Z"
 platform: |
   Ubuntu 24.04.5 LTS (noble), x86_64
