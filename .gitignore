@@ -17,3 +17,9 @@ build/
 
 # arduino-cli / Arduino data if a sandbox ever puts it in the tree
 .arduino15/
+
+# Compiled firmware outputs from our own sketches (regenerable). Device dumps
+# such as backup_flash.bin are NOT matched by these patterns.
+*.ino.elf
+*.ino.hex
+*.ino.map
