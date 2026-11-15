@@ -45,4 +45,4 @@ Then `tools/lb_flash.py build` compiles with FQBN `PY32Duino:PY32:GenF030:pnum=P
 
 - Index URL is a CI "Nightly" release asset, not a stable endpoint. If it disappears, install the core from the release zip (`Arduino-PY32-0.1.3.zip`) into `~/.arduino15/packages/PY32Duino/hardware/PY32/0.1.3/`, and the xpack toolchain and CMSIS 5.7.0 by hand.
 - The 0.33.0 pin is old; newer arduino-cli should work but is untested here.
-- Everything installed lives outside the repo (`~/.local/bin`, `~/.arduino15`, `lightning_bugs/.venv` which is git-ignored). A fresh sandbox needs `tools/setup.sh` again (~260 MiB download).
+- Everything installed lives outside the repo (`~/.local/bin`, `~/.arduino15`, `lightning_bugs/.venv` which is git-ignored). A fresh sandbox runs `tools/setup.sh` again at launch (`setup:` in `claude_sandbox_deps.yaml`; ~260 MiB download the first time).

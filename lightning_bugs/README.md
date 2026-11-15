@@ -70,7 +70,7 @@ Beat `n` falls at Unix time `epoch + n × period`. Every device synced against a
 
 ## Build and flash wrapper
 
-First-time setup: in a `claude_sandbox` session the root `claude_sandbox_deps.yaml` already installs `arduino-cli`, `python3-venv` and `libusb`; then run `bash tools/setup.sh` (no root; installs the py32duino core, toolchain and pyocd venv, and installs `arduino-cli` itself if it isn't on `PATH`), then `export PATH="$HOME/.local/bin:$PWD/.venv/bin:$PATH"`. See `assessments/toolchain.md`.
+First-time setup: in a `claude_sandbox` session nothing needs running by hand. The root `claude_sandbox_deps.yaml` installs `python3-venv` and `libusb` (apt) and runs `tools/setup.sh` at every launch (no root; it installs the pinned `arduino-cli`, the py32duino core and toolchain, and the pyocd venv with the FT232R plugin, and is quick when already done). Then `export PATH="$HOME/.local/bin:$PWD/.venv/bin:$PATH"`. Outside a sandbox the script refuses to run, so install the same pieces yourself. See `assessments/toolchain.md`.
 
 `tools/lb_flash.py` implements step 3 of `assessments/swd-recovery.md`. Needs `arduino-cli` (with the py32duino core) and `pyocd`.
 
