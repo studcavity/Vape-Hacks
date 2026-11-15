@@ -4,6 +4,14 @@
 #   - the py32duino core (+ its toolchain and CMSIS) via arduino-cli
 #   - a Python venv (lightning_bugs/.venv) with pyocd and the Puya pack
 # Safe to re-run. See assessments/toolchain.md for why.
+#
+# Hazardous outside a sandbox (installs into ~/.local/bin and downloads and runs
+# tools), so it refuses to run anywhere but inside a claude_sandbox container,
+# where claude_sandbox_deps.yaml runs it at every launch. Do not remove the guard.
+
+# Refuse to run anywhere but inside a claude_sandbox container.
+[ -f /etc/claude-sandbox ] || { echo "refusing: not inside a claude_sandbox container" >&2; exit 1; }
+
 set -euo pipefail
 
 ARDUINO_CLI_VERSION=0.33.0   # the version py32duino's own CI uses

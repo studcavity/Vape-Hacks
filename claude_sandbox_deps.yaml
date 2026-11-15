@@ -17,6 +17,13 @@ apt:
 # installs the pinned, checksum-verified arduino-cli to ~/.local/bin instead.
 # Restore a `binaries:` entry once the launcher is fixed.
 
-last_generated: "2026-11-15T01:55:38Z"
+# Runs inside the container as `ubuntu` at the start of every launch (idempotent).
+# The script carries a guard so it refuses to run outside a claude_sandbox.
+setup:
+  - name: lightning-bugs-toolchain
+    path: lightning_bugs/tools/setup.sh
+    timeout: 1800
+
+last_generated: "2026-11-15T01:58:08Z"
 platform: |
   Ubuntu 24.04.5 LTS (noble), x86_64
