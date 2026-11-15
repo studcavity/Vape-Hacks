@@ -38,3 +38,16 @@ jobs:
       - run: pip install -r requirements-dev.txt
       # Drives real git and bash: .gitignore rules, claude_sandbox_deps.yaml schema, setup.sh guard.
       - run: python -m pytest tests
+
+  integration:
+    needs: [unit, repo-config]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12", cache: pip, cache-dependency-path: requirements-dev.txt}
+      - run: pip install -r requirements-dev.txt
+      # lb_flash.py end to end (CLI + canary policy) against fake arduino-cli/pyocd. No hardware.
+      - run: python -m pytest lightning_bugs/tests/test_lb_flash_integration.py
+      # Whole suite once more, exactly as a developer would run it.
+      - run: python -m pytest

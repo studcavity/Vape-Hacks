@@ -29,4 +29,6 @@ Tests live in the repo and run in CI (`.github/workflows/ci.yml`). Use a venv:
 
 - `lightning_bugs/host/test_lb_sync.py`: simulated-device sync tests (no hardware).
 - `lightning_bugs/tests/`: unit tests for `lb_flash.py` safety rules and `lb_sync.py` helpers.
+- `lightning_bugs/tests/test_lb_flash_integration.py`: drives `lb_flash.py` against fake `arduino-cli`/`pyocd`.
+- `tests/`: repo hygiene (`.gitignore`, `claude_sandbox_deps.yaml`, `setup.sh` guard).
 - Nothing here touches real hardware; flashing a device is still a manual, canary-first step.
