@@ -27,3 +27,14 @@ jobs:
       - run: pip install -r requirements-dev.txt
       # Pure-function tests and the simulated-device sync tests: no hardware, no pyocd.
       - run: python -m pytest lightning_bugs/host lightning_bugs/tests/test_lb_flash_unit.py lightning_bugs/tests/test_lb_sync_helpers.py -m "not integration"
+
+  repo-config:
+    needs: unit
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12", cache: pip, cache-dependency-path: requirements-dev.txt}
+      - run: pip install -r requirements-dev.txt
+      # Drives real git and bash: .gitignore rules, claude_sandbox_deps.yaml schema, setup.sh guard.
+      - run: python -m pytest tests
