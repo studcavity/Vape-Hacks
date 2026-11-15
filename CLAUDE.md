@@ -29,7 +29,8 @@ The Lightning Bugs host tools support **two debug-probe stacks, and both are con
   (USB `0403:6001`; select with `--probe ft232r:`).
 
 **Always implement changes for both to keep parity.** That covers `lb_flash.py` / `lb_sync.py`, `setup.sh`,
-`claude_sandbox_deps.yaml` and any USB passthrough or sandbox configuration, tests, CI and docs. If you
+`claude_sandbox_deps.yaml`, `claude_sandbox_host.yaml` (the USB requests for both probes; the deps file
+must never carry `usb:`, the launcher rejects it) and any other sandbox configuration, tests, CI and docs. If you
 change something for one stack, either do the same for the other in the same change or say explicitly why
 it cannot be done and record the gap in `lightning_bugs/probes/ft232r/README.md`. Keep `lb_flash.py` and
 `lb_sync.py` probe-agnostic (they talk only to pyocd; the probe is chosen with `--probe`); put probe-specific
@@ -49,5 +50,5 @@ Tests live in the repo and run in CI (`.github/workflows/ci.yml`). Use a venv:
 - `lightning_bugs/tests/`: unit tests for `lb_flash.py` safety rules and `lb_sync.py` helpers.
 - `lightning_bugs/tests/test_lb_flash_integration.py`: drives `lb_flash.py` against fake `arduino-cli`/`pyocd`.
 - `lightning_bugs/tests/ft232r/`: the FT232R plugin against a pin-level simulated SW-DP (wire, transport, SWD, probe, pyocd `DebugPort`, `lb_sync`).
-- `tests/`: repo hygiene (`.gitignore`, `claude_sandbox_deps.yaml`, `setup.sh` guard).
+- `tests/`: repo hygiene (`.gitignore`, `claude_sandbox_deps.yaml`, `claude_sandbox_host.yaml`, `setup.sh` guard).
 - Nothing here touches real hardware; flashing a device is still a manual, canary-first step.

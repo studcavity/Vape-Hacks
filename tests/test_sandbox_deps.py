@@ -6,7 +6,8 @@ import re
 import pytest
 import yaml
 
-ALLOWED_KEYS = {"apt", "scripts", "binaries", "setup", "last_generated", "platform", "usb"}
+# The launcher's sandbox_deps.parse() accepts exactly these; anything else aborts the launch.
+ALLOWED_KEYS = {"image", "apt", "scripts", "binaries", "setup", "last_generated", "platform"}
 NAME_RE = re.compile(r"^[A-Za-z0-9._+-]+$")
 
 
@@ -59,7 +60,7 @@ def test_metadata_is_present_and_well_formed(deps):
     assert "Ubuntu" in deps["platform"]
 
 
-def test_no_usb_request_until_launcher_supports_it(deps):
-    """An old launcher rejects unknown keys and aborts the whole launch (see USB plan on the
-    throwaway/usb-passthrough-plan branch). Remove this test when the launcher supports `usb:`."""
+def test_usb_requests_live_in_the_host_file_not_here(deps):
+    """The launcher's deps schema has no `usb` key (it would abort the launch). Device requests go in
+    claude_sandbox_host.yaml; see tests/test_sandbox_host.py."""
     assert "usb" not in deps

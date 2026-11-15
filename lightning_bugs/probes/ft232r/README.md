@@ -28,6 +28,18 @@ FT232R                                   target (PY32F030)
   (D0..D7 = TXD, RXD, RTS#, CTS#, DTR#, DSR#, DCD#, RI#). `nreset` is optional and push-pull: put about
   1 kohm in series.
 
+## In a claude_sandbox
+
+The repo requests both probes in `claude_sandbox_host.yaml`; nothing is attached until the host user
+approves it (`--usb 0403:6001`, the launcher's prompt, or the allowlist `~/.config/claude_sandbox/usb_allow`).
+
+- `0403:6001` is the generic ID of **every** FT232R serial adaptor, and the launcher attaches every host
+  device with an approved ID. Approve it only when no other FT232R on the host matters. Plug in just the
+  probe adaptor, or scope the allowlist line to this repo (`0403:6001 studcavity/Vape-Hacks`).
+- Unverified: whether the host's `ftdi_sio` driver (which makes the adaptor `/dev/ttyUSB0`) lets the
+  sandbox claim the interface. Try `python -m pyocd_ft232r` first; if it finds the adaptor but `check`
+  cannot open it, unload `ftdi_sio` on the host (`sudo modprobe -r ftdi_sio`) and record the outcome here.
+
 ## Using it
 
 The adaptor is a plain USB-serial device, so it is **only offered when you ask for it** (a tool run
