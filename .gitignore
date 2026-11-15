@@ -1,0 +1,19 @@
+# Host-specific / generated; never commit
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# Build output (arduino-cli --output-dir, PlatformIO)
+build/
+.pio/
+
+# Editor
+.vscode/
+.idea/
+
+# Local state for tools/lb_flash.py (per-machine canary record)
+.lb_canary.json
+
+# arduino-cli / Arduino data if a sandbox ever puts it in the tree
+.arduino15/
