@@ -70,7 +70,7 @@ Beat `n` falls at Unix time `epoch + n × period`. Every device synced against a
 
 ## Build and flash wrapper
 
-First-time setup: in a `claude_sandbox` session nothing needs running by hand. The root `claude_sandbox_deps.yaml` installs `python3-venv` and `libusb` (apt) and runs `tools/setup.sh` at every launch (no root; it installs the pinned `arduino-cli`, the py32duino core and toolchain, and the pyocd venv with the FT232R plugin, and is quick when already done). Then `export PATH="$HOME/.local/bin:$PWD/.venv/bin:$PATH"`. Outside a sandbox the script refuses to run, so install the same pieces yourself. See `assessments/toolchain.md`.
+First-time setup: in a `claude_sandbox` session nothing needs running by hand. The root `claude_sandbox_deps.yaml` installs `python3-venv` and `libusb` (apt) and runs `tools/setup.sh` at every launch (no root; it installs the pinned `arduino-cli`, the py32duino core and toolchain, and the pyocd venv with the FT232R plugin, and is quick when already done). Then `export PATH="$HOME/.local/bin:$PWD/.venv/bin:$PATH"`. On your own machine the script refuses to run unless you pass `--i-know-this-modifies-my-system`; it then keeps everything under `lightning_bugs/.tools/` (git-ignored) and `.venv`, never touches `~/.local/bin`, `~/.arduino15` or your arduino-cli config, writes only pip's and pyocd's package caches outside the repo, and prints the `PATH` and `ARDUINO_DIRECTORIES_*` exports to use afterwards (Linux only; `lb_flash.py` honours `ARDUINO_DIRECTORIES_DATA`). See `assessments/toolchain.md`.
 
 `tools/lb_flash.py` implements step 3 of `assessments/swd-recovery.md`. Needs `arduino-cli` (with the py32duino core) and `pyocd`.
 

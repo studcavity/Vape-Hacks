@@ -24,6 +24,8 @@ def ignored(repo, path):
     "firmware.bin",
     "lightning_bugs/.lb_canary.json",
     "lightning_bugs/.venv/bin/pyocd",
+    "lightning_bugs/.tools/bin/arduino-cli",
+    "lightning_bugs/.tools/arduino15/packages/PY32Duino/x",
     "lightning_bugs/host/__pycache__/lb_sync.cpython-312.pyc",
     ".arduino15/package_index.json",
 ])

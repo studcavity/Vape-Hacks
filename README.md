@@ -33,4 +33,4 @@ Lint takes the file list from `git ls-files` because `setup.sh` creates `lightni
 
 CI (`.github/workflows/ci.yml`) runs everything on Ubuntu 24.04 and 26.04 runners: lint, the unit tests on Python 3.10, 3.12 and 3.14 (3.14 only on 26.04, 3.10 only on 24.04), the repo checks, the integration tests and the FT232R plugin tests, on every push.
 
-Not covered: anything that needs a real probe or device. Flashing is still a manual step and must go through a canary unit first (see `lightning_bugs/README.md`). One test, `test_real_script_refuses_outside_sandbox`, is skipped inside a claude_sandbox container and runs elsewhere.
+Not covered: anything that needs a real probe or device. Flashing is still a manual step and must go through a canary unit first (see `lightning_bugs/README.md`). A few `setup.sh` tests depend on whether `/etc/claude-sandbox` exists and run only on the matching side: inside a sandbox the sandbox-mode run is exercised, elsewhere (CI, your machine) the refusal and the `--i-know-this-modifies-my-system` mode are. All of them use fake `arduino-cli`/`python3`, so nothing is downloaded or installed.

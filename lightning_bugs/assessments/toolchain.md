@@ -18,7 +18,7 @@
 
 `tools/setup.sh` (re-runnable):
 
-1. Downloads `arduino-cli` 0.33.0 (the version the core's CI uses) from GitHub releases, verifies it against the release checksum file, installs to `~/.local/bin`. Not a `curl | sh`.
+1. Downloads `arduino-cli` 0.33.0 (the version the core's CI uses) from GitHub releases, verifies it against the release checksum file, installs to `~/.local/bin` (in a sandbox) or `.tools/bin` (on your own machine, see below). Not a `curl | sh`. Upstream's own `install.sh` was rejected because it never verifies the tarball it downloads.
 2. Installs `PY32Duino:PY32@0.1.3` through that index.
 3. Creates `lightning_bugs/.venv` with `pyocd` and installs the Puya pack (`Puya.PY32F0xx_DFP`); target `py32f030x8` is then known to pyocd.
 
@@ -45,4 +45,4 @@ Then `tools/lb_flash.py build` compiles with FQBN `PY32Duino:PY32:GenF030:pnum=P
 
 - Index URL is a CI "Nightly" release asset, not a stable endpoint. If it disappears, install the core from the release zip (`Arduino-PY32-0.1.3.zip`) into `~/.arduino15/packages/PY32Duino/hardware/PY32/0.1.3/`, and the xpack toolchain and CMSIS 5.7.0 by hand.
 - The 0.33.0 pin is old; newer arduino-cli should work but is untested here.
-- Everything installed lives outside the repo (`~/.local/bin`, `~/.arduino15`, `lightning_bugs/.venv` which is git-ignored). A fresh sandbox runs `tools/setup.sh` again at launch (`setup:` in `claude_sandbox_deps.yaml`; ~260 MiB download the first time).
+- In a sandbox, everything installed lives outside the repo (`~/.local/bin`, `~/.arduino15`) except `lightning_bugs/.venv` (git-ignored). On your own machine, `tools/setup.sh --i-know-this-modifies-my-system` keeps all of it in the repo instead: `lightning_bugs/.tools/{bin,arduino15,arduino-user,arduino-downloads}` (git-ignored), selected through `ARDUINO_DIRECTORIES_*`; only pip's and pyocd's package caches go to your home. Verified end to end with an empty `HOME`: the core builds the firmware and both safety checks pass. A fresh sandbox runs `tools/setup.sh` again at launch (`setup:` in `claude_sandbox_deps.yaml`; ~260 MiB download the first time).

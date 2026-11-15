@@ -2,3 +2,5 @@ __pycache__/
 build/
 .lb_canary.json
 .venv/
+# setup.sh --i-know-this-modifies-my-system keeps arduino-cli and the core here
+.tools/
