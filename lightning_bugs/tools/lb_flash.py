@@ -37,8 +37,8 @@ CANARY_FILE = ROOT / ".lb_canary.json"
 sys.path.insert(0, str(ROOT / "host"))
 
 # The py32duino board identifier depends on how the core was installed; override
-# with --fqbn. Run `arduino-cli board listall py32` to find yours.
-DEFAULT_FQBN = "py32:py32:PY32F030X8"
+# with --fqbn. Run `arduino-cli board listall PY32` to find yours.
+DEFAULT_FQBN = "PY32Duino:PY32:GenF030:pnum=PY32F030x8"
 DEFAULT_TARGET = "py32f030x8"
 DEFAULT_FREQ = 500_000
 
@@ -57,8 +57,10 @@ SOURCE_RULES = [
     (r"\bDBGMCU\b", "debug-MCU configuration (must be reviewed by a person)"),
 ]
 
-# Symbols that must not appear in the linked ELF.
-BINARY_SYMBOL_RULES = r"(HAL_FLASHEx_OB|HAL_FLASH_OB_Launch|HAL_PWR_Enter(STOP|STANDBY)|HAL_RCC_OscConfig)"
+# Symbols that must not appear in the linked ELF. HAL_RCC_OscConfig/ClockConfig
+# are deliberately NOT listed: the core's own boot-time SystemClock_Config()
+# links them into every sketch (verified: they are present in the stock build).
+BINARY_SYMBOL_RULES = r"(HAL_FLASHEx_OB|HAL_FLASH_OB_Launch|HAL_PWR_Enter(STOP|STANDBY))"
 # Flash-unlock key values (STM32-family; assumed the same on PY32). Little-endian in .bin.
 UNLOCK_KEYS = {
     "FLASH_KEY1 0x45670123": bytes.fromhex("23016745"),

@@ -70,6 +70,8 @@ Beat `n` falls at Unix time `epoch + n × period`. Every device synced against a
 
 ## Build and flash wrapper
 
+First-time setup (no root, no distro packages): `bash tools/setup.sh`, then `export PATH="$HOME/.local/bin:$PWD/.venv/bin:$PATH"`. See `assessments/toolchain.md`.
+
 `tools/lb_flash.py` implements step 3 of `assessments/swd-recovery.md`. Needs `arduino-cli` (with the py32duino core) and `pyocd`.
 
 ```sh
@@ -79,7 +81,7 @@ python3 tools/lb_flash.py -u <probe> flash --canary      # flash a canary unit, 
 python3 tools/lb_flash.py -u <probe> flash               # sealed unit: only canary-tested builds
 ```
 
-It refuses to build if the sketch mentions PA13/PA14, raw GPIOA mode/AF writes, STOP/STANDBY, deep-sleep bits, flash/option-byte access, RCC clock changes or DBGMCU (waive one line with `// lb-allow-swd-risk`). After building it checks the ELF for forbidden HAL symbols and the `.bin` for flash-unlock keys. After flashing it resets the chip and confirms it can reattach over SWD in the guard, after the guard, and 30 s later. The `--canary` flag is your declaration that the unit is recoverable; builds that pass are recorded by hash in `.lb_canary.json` (git-ignored). The default `--fqbn` is a guess; find yours with `arduino-cli board listall py32`.
+It refuses to build if the sketch mentions PA13/PA14, raw GPIOA mode/AF writes, STOP/STANDBY, deep-sleep bits, flash/option-byte access, RCC clock changes or DBGMCU (waive one line with `// lb-allow-swd-risk`). After building it checks the ELF for forbidden HAL symbols and the `.bin` for flash-unlock keys. After flashing it resets the chip and confirms it can reattach over SWD in the guard, after the guard, and 30 s later. The `--canary` flag is your declaration that the unit is recoverable; builds that pass are recorded by hash in `.lb_canary.json` (git-ignored). The default `--fqbn` is `PY32Duino:PY32:GenF030:pnum=PY32F030x8`.
 
 ## Usage
 
@@ -135,7 +137,8 @@ So **"roughly in sync" (within a fraction of a second) for 4–6 h unplugged is 
 - [x] Host sync tool with offset/rate measurement, `--refine`, `status`, `hold`/`release`
 - [x] Example beat-synced sketch
 - [x] Host logic tested against a simulated device (`python3 -m unittest host/test_lb_sync.py`)
-- [ ] **Not yet compiled or run on hardware.** Check that `uwTick` is the counter behind `millis()` in the py32duino core (the tool refuses to sync if the counter isn't ~1 kHz) and that the build fits.
+- [x] Compiles with py32duino 0.1.3: 13.3 KB of 64 KB flash, 1.4 KB of 8 KB RAM
+- [ ] **Not yet run on hardware.** Check that `uwTick` is the counter behind `millis()` (it is linked; the tool refuses to sync if the counter isn't ~1 kHz).
 - [ ] Measure real drift over 4–6 h with `status`, and replace the estimates above with measured numbers
 - [ ] Optional: store the rate correction in flash so it survives a reboot
 - [ ] Optional: hardware resync input
