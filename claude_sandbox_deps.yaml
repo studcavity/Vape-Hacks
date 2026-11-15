@@ -1,0 +1,19 @@
+# Tooling installed into the sandbox before the session starts.
+# Format: https://github.com/studcavity/claude_sandbox (README: "repo dependencies").
+# Install order: apt, binaries, scripts. Runs as root, before any credentials exist.
+#
+# Only system-level tools live here. The py32duino core, its ARM toolchain and
+# the pyocd venv are per-user and are set up by lightning_bugs/tools/setup.sh.
+# See lightning_bugs/assessments/toolchain.md.
+
+apt:
+  - python3-venv      # setup.sh creates lightning_bugs/.venv for pyocd
+  - libusb-1.0-0      # pyocd's USB probe access (Pico/CMSIS-DAP)
+
+binaries:
+  # Pinned to 0.33.0, the version py32duino's own CI uses. The sha256 is the
+  # release tarball's and matches the release's published checksums file.
+  - name: arduino-cli
+    url: https://github.com/arduino/arduino-cli/releases/download/0.33.0/arduino-cli_0.33.0_Linux_64bit.tar.gz
+    sha256: 0eeaba59a345f4d2aab03d4412dd490e5a4db0d006be6c0a72f23df0ed7ecab9
+    archive_path: arduino-cli

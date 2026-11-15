@@ -70,7 +70,7 @@ Beat `n` falls at Unix time `epoch + n × period`. Every device synced against a
 
 ## Build and flash wrapper
 
-First-time setup (no root, no distro packages): `bash tools/setup.sh`, then `export PATH="$HOME/.local/bin:$PWD/.venv/bin:$PATH"`. See `assessments/toolchain.md`.
+First-time setup: in a `claude_sandbox` session the root `claude_sandbox_deps.yaml` already installs `arduino-cli`, `python3-venv` and `libusb`; then run `bash tools/setup.sh` (no root; installs the py32duino core, toolchain and pyocd venv, and installs `arduino-cli` itself if it isn't on `PATH`), then `export PATH="$HOME/.local/bin:$PWD/.venv/bin:$PATH"`. See `assessments/toolchain.md`.
 
 `tools/lb_flash.py` implements step 3 of `assessments/swd-recovery.md`. Needs `arduino-cli` (with the py32duino core) and `pyocd`.
 

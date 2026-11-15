@@ -19,8 +19,11 @@ case "$arch" in
   *) echo "unsupported architecture: $arch" >&2; exit 1 ;;
 esac
 
+# claude_sandbox_deps.yaml installs a pinned arduino-cli to /usr/local/bin; reuse
+# whatever is on PATH if it is the pinned version, otherwise install our own.
 mkdir -p "$BIN_DIR"
-if [ "$("$BIN_DIR/arduino-cli" version 2>/dev/null | awk '{print $3}')" != "$ARDUINO_CLI_VERSION" ]; then
+export PATH="$BIN_DIR:$PATH"
+if [ "$(arduino-cli version 2>/dev/null | awk '{print $3}')" != "$ARDUINO_CLI_VERSION" ]; then
   tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
   base="https://github.com/arduino/arduino-cli/releases/download/${ARDUINO_CLI_VERSION}"
   tarball="arduino-cli_${ARDUINO_CLI_VERSION}_${asset}.tar.gz"
