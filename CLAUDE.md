@@ -10,7 +10,7 @@ This repository (`studcavity/Vape-Hacks`) is a sandbox fork of the original proj
 
 ## Compiled binaries: don't commit them by default
 
-Build outputs (`.elf`, `.hex`, `.map`, `.bin`, `.o`, `build/`) are generated and are not tracked. Do not `git add` them.
+Build outputs (`.elf`, `.hex`, `.map`, `.bin`, `.o`, `build/`) are generated and are not tracked (`*.bin` is git-ignored). Do not `git add` them.
 
 Only commit a compiled binary if one of these is true:
 

@@ -23,3 +23,8 @@ build/
 *.ino.elf
 *.ino.hex
 *.ino.map
+
+# Compiled binaries in general. Device dumps are the exception: they are the
+# only copy of code we don't have, so they stay trackable (ask the user first).
+*.bin
+!backup_flash*.bin
