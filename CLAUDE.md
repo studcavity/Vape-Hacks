@@ -18,3 +18,15 @@ Only commit a compiled binary if one of these is true:
 - It is the **only copy of code that cannot be regenerated**, such as a flash dump read from a device whose source we don't have (e.g. `backup_flash.bin`). Even then, **ask the user before committing it**.
 
 If a build produces binaries inside the tree, add them to `.gitignore` instead of committing them.
+
+## Tests
+
+Tests live in the repo and run in CI (`.github/workflows/ci.yml`). Use a venv:
+
+    python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
+    .venv/bin/python -m pytest                 # everything
+    .venv/bin/python -m pyflakes lightning_bugs tests && shellcheck lightning_bugs/tools/setup.sh
+
+- `lightning_bugs/host/test_lb_sync.py`: simulated-device sync tests (no hardware).
+- `lightning_bugs/tests/`: unit tests for `lb_flash.py` safety rules and `lb_sync.py` helpers.
+- Nothing here touches real hardware; flashing a device is still a manual, canary-first step.

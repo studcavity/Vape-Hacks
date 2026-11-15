@@ -1,0 +1,4 @@
+# Test/lint tooling for CI and local runs (see CLAUDE.md "Tests").
+pytest>=8
+pyyaml>=6
+pyflakes>=3
