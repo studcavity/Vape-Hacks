@@ -9,6 +9,7 @@
 apt:
   - python3-venv      # setup.sh creates lightning_bugs/.venv for pyocd
   - libusb-1.0-0      # pyocd's USB probe access (Pico/CMSIS-DAP)
+  - shellcheck        # lint lightning_bugs/tools/setup.sh (CI does the same)
   - usbutils          # lsusb, to check which host USB devices the sandbox sees
 
 # arduino-cli is intentionally NOT listed: the launcher's put_file() runs
@@ -24,6 +25,6 @@ setup:
     path: lightning_bugs/tools/setup.sh
     timeout: 1800
 
-last_generated: "2026-11-15T01:58:08Z"
+last_generated: "2026-11-15T01:59:28Z"
 platform: |
   Ubuntu 24.04.5 LTS (noble), x86_64
