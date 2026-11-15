@@ -12,6 +12,8 @@ verified against real incus and hardware**, so this is the first real test, for 
 | Request name in `claude_sandbox_host.yaml` | `pico-probe` | `ft232r-adaptor` |
 | pyocd selection | automatic | opt-in: `--probe ft232r:` or `PYOCD_FT232R_AUTODETECT=1` |
 
+What remains overall, in order, is in `REMAINING_WORK.md`.
+
 Throwaway branch. Record each result for **both** stacks (Vape-Hacks `CLAUDE.md`, "Probe parity"); put
 FT232R findings in `lightning_bugs/probes/ft232r/README.md`.
 
