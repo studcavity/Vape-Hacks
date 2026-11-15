@@ -53,6 +53,9 @@ if [ ! -x "$ROOT/.venv/bin/pyocd" ]; then
   python3 -m venv "$ROOT/.venv"
   "$ROOT/.venv/bin/pip" install -q --upgrade pip pyocd
 fi
+# Second supported probe stack: FT232R bit-bang plugin (probes/ft232r). Both stacks stay supported;
+# see "Probe parity" in CLAUDE.md. Editable, so edits to the plugin take effect without reinstalling.
+"$ROOT/.venv/bin/pip" install -q -e "$ROOT/probes/ft232r"
 "$ROOT/.venv/bin/pyocd" pack update >/dev/null 2>&1 || true
 "$ROOT/.venv/bin/pyocd" pack install py32f030x8 || echo "note: pack install failed; run '.venv/bin/pyocd pack find py32f030' and install the match" >&2
 
