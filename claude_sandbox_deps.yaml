@@ -12,19 +12,24 @@ apt:
   - shellcheck        # lint lightning_bugs/tools/setup.sh (CI does the same)
   - usbutils          # lsusb, to check which host USB devices the sandbox sees
 
-# arduino-cli is intentionally NOT listed: the launcher's put_file() runs
-# `install ... /dev/stdin`, which fails in the container with "Permission denied"
-# and is used by both `binaries:` and `scripts:`. lightning_bugs/tools/setup.sh
-# installs the pinned, checksum-verified arduino-cli to ~/.local/bin instead.
-# Restore a `binaries:` entry once the launcher is fixed.
+# arduino-cli is intentionally NOT listed: lightning_bugs/tools/setup.sh installs it (pinned to 0.33.0,
+# checked against the release's published checksums) so that one script does the job both here and, with
+# its explicit --i-know-this-modifies-my-system opt-in, on a developer's own machine. A `binaries:` entry
+# would only cover the sandbox. (The launcher's old put_file `/dev/stdin` bug, which first forced this,
+# is fixed, so that is no longer the reason.)
 
 # Runs inside the container as `ubuntu` at the start of every launch (idempotent).
-# The script carries a guard so it refuses to run outside a claude_sandbox.
+# The script carries a guard: outside a claude_sandbox it refuses unless given --i-know-this-modifies-my-system
+# (then it keeps everything under lightning_bugs/.tools). Here it is run with no arguments.
 setup:
   - name: lightning-bugs-toolchain
     path: lightning_bugs/tools/setup.sh
     timeout: 1800
 
-last_generated: "2026-11-15T01:59:28Z"
+last_generated: "2026-11-15T05:16:46Z"
 platform: |
-  Ubuntu 24.04.5 LTS (noble), x86_64
+  Distributor ID:	Ubuntu
+  Description:	Ubuntu 24.04.5 LTS
+  Release:	24.04
+  Codename:	noble
+  x86_64
