@@ -462,3 +462,9 @@ def test_open_raw_probe_honours_the_probe_id(monkeypatch):
 def test_cli_watch_is_a_subcommand(tree):
     r = cli(tree, "watch", "--help")
     assert r.returncode == 0 and "--timeout" in r.stdout
+
+
+def test_dump_accepts_timeout_as_an_alias_of_poll_timeout(tree):
+    """`watch` calls it --timeout; dump used to accept only --poll-timeout and rejected --timeout."""
+    r = cli(tree, "dump", "--poll", "--timeout", "1", "--help")
+    assert r.returncode == 0 and "--timeout" in r.stdout

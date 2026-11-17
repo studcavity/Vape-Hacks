@@ -473,7 +473,7 @@ def main() -> int:
     dp.add_argument("--poll", action="store_true",
                     help="keep retrying the connection in this process (about 12 attempts/s) until the chip "
                          "answers, then read at once. For a unit that only answers SWD briefly after waking")
-    dp.add_argument("--poll-timeout", type=float, default=120.0, metavar="SECONDS",
+    dp.add_argument("--poll-timeout", "--timeout", type=float, default=120.0, metavar="SECONDS",
                     help="give up after this long with --poll (default 120)")
     fp = sub.add_parser("flash", help="check, build, flash, verify reconnect")
     fp.add_argument("--canary", action="store_true", help="this unit is a canary (recoverable without opening)")
