@@ -9,7 +9,7 @@ Implements step 3 of assessments/swd-recovery.md:
   watch   poll the chip's SWD debug port ~800 times a second and report when it answers and for how long
           (finds out whether a connect window exists and how long it is; reads no flash, halts nothing)
   dump    read the whole flash over SWD (twice by default, compared), and save it (do this before flashing a unit)
-  flash   run check + build, flash over SWD, then confirm we can still reconnect
+  flash   run check + build, (optionally --wait for the chip to answer,) flash over SWD, then confirm we can still reconnect
           (in the boot guard, after the guard, and 30 s later)
 
 Canary policy: a build must be flashed to a canary unit (one you can power-cycle
@@ -230,6 +230,11 @@ def cmd_flash(args) -> None:
         if input("Flash a SEALED unit with this canary-tested build? [y/N] ").strip().lower() != "y":
             raise Fail("aborted")
 
+    if args.wait:
+        # Start the flash inside the window: wait until the chip answers, then launch pyocd at once. This only
+        # reads one word, so it is safe to repeat; the flash itself is run once, never retried (its exit code
+        # cannot tell "never connected" from "failed halfway").
+        poll_until(lambda: with_target(args, lambda target: target.read32(FLASH_BASE), "the chip"), args.wait)
     probe = ["-u", args.probe] if args.probe else []
     cmd = [pyocd, "flash", "-t", args.target, "-f", str(args.frequency), *probe,
            "--base-address", "0x08000000", str(binf)]
@@ -594,6 +599,9 @@ def main() -> int:
     fp.add_argument("--canary", action="store_true", help="this unit is a canary (recoverable without opening)")
     fp.add_argument("--yes", action="store_true", help="don't prompt before flashing a sealed unit")
     fp.add_argument("--bin", help="flash an existing .bin instead of building")
+    fp.add_argument("--wait", nargs="?", type=float, const=120.0, default=0.0, metavar="SECONDS",
+                    help="before flashing, poll until the chip answers SWD (wake the unit now), then flash at once; "
+                         "give up after SECONDS (default 120 when the flag has no value)")
     args = ap.parse_args()
     try:
         {"check": cmd_check, "build": cmd_build, "watch": cmd_watch, "options": cmd_options, "dump": cmd_dump, "flash": cmd_flash}[args.cmd](args)

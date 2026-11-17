@@ -95,9 +95,9 @@ def flasher(tree, fakebin, monkeypatch):
     verifies = []
     monkeypatch.setattr(lb_flash, "verify_connect", lambda args, label: verifies.append(label))
 
-    def run(canary=False, yes=False, bin=None, probe=None):
+    def run(canary=False, yes=False, bin=None, probe=None, wait=0.0):
         args = argparse.Namespace(fqbn=lb_flash.DEFAULT_FQBN, target="py32f030x8", probe=probe,
-                                  frequency=500_000, canary=canary, yes=yes, bin=bin)
+                                  frequency=500_000, canary=canary, yes=yes, bin=bin, wait=wait)
         return lb_flash.cmd_flash(args)
     run.verifies, run.calls, run.tree = verifies, fakebin, tree
     return run
@@ -609,3 +609,68 @@ def test_cmd_options_without_poll_fails_fast(monkeypatch):
 def test_cli_options_is_a_subcommand(tree):
     r = cli(tree, "options", "--help")
     assert r.returncode == 0 and "--poll" in r.stdout
+
+
+# ─── flash --wait ────────────────────────────────────────────────────────────
+@pytest.fixture
+def waiter(flasher, monkeypatch):
+    """flasher plus a scripted with_target for the --wait poll: the script lists what each attempt does."""
+    events, script = [], []
+
+    def fake(args, fn, what="flash", extra_options=None):
+        flashed = bool(pyocd_calls(flasher, "flash"))
+        events.append(("poll", flashed))
+        step = script.pop(0)
+        if isinstance(step, BaseException):
+            raise step
+        return step
+    monkeypatch.setattr(lb_flash, "with_target", fake)
+    flasher.events, flasher.script = events, script
+    return flasher
+
+
+def test_flash_wait_polls_until_the_chip_answers_then_flashes_once(waiter):
+    waiter.script += [lb_flash.Fail("No ACK")] * 3 + [0x20000A78]
+    waiter(canary=True, wait=30.0)
+    assert [e[0] for e in waiter.events] == ["poll"] * 4
+    assert not any(flashed for _, flashed in waiter.events), "pyocd flash must not start before the chip answers"
+    assert len(pyocd_calls(waiter, "flash")) == 1
+    assert waiter.verifies == ["boot guard", "after guard", "after 30 s"]
+
+
+def test_flash_wait_times_out_without_running_pyocd_or_recording_a_canary(waiter, monkeypatch):
+    clock = iter(x * 20.0 for x in range(100))
+    monkeypatch.setattr(lb_flash.time, "monotonic", lambda: next(clock))
+    waiter.script += [lb_flash.Fail("No ACK")] * 50
+    with pytest.raises(lb_flash.Fail, match="no usable read in 30 s"):
+        waiter(canary=True, wait=30.0)
+    assert not pyocd_calls(waiter, "flash")
+    assert not (waiter.tree / ".lb_canary.json").exists()
+
+
+def test_flash_wait_gives_up_at_once_with_no_probe(waiter):
+    waiter.script += [lb_flash.Fatal("no debug probe found"), 1]
+    with pytest.raises(lb_flash.Fatal, match="no debug probe"):
+        waiter(canary=True, wait=30.0)
+    assert len(waiter.events) == 1 and not pyocd_calls(waiter, "flash")
+
+
+def test_flash_without_wait_does_not_poll(waiter):
+    waiter(canary=True)
+    assert waiter.events == [] and len(pyocd_calls(waiter, "flash")) == 1
+
+
+def test_flash_wait_comes_after_the_sealed_unit_prompt(waiter, monkeypatch):
+    waiter.script += [1, 1]
+    waiter(canary=True, wait=5.0)                              # records the canary, uses one scripted step
+    order = []
+    monkeypatch.setattr("builtins.input", lambda prompt: order.append("prompt") or "y")
+    orig = lb_flash.with_target
+    monkeypatch.setattr(lb_flash, "with_target", lambda *a, **k: order.append("poll") or orig(*a, **k))
+    waiter(wait=5.0)
+    assert order == ["prompt", "poll"], "do not spend the connect window on a prompt"
+
+
+def test_flash_wait_flag_in_the_cli(tree):
+    r = cli(tree, "flash", "--help")
+    assert r.returncode == 0 and "--wait" in r.stdout
