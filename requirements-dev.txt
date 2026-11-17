@@ -3,6 +3,6 @@ pytest>=8
 pyyaml>=6
 pyflakes>=3
 packaging>=23
--c lightning_bugs/constraints.txt     # exact pyocd / pyftdi versions, shared with setup.sh
-# FT232R probe plugin and its simulated-hardware tests (pulls in pyocd and pyftdi)
--e lightning_bugs/probes/ft232r
+-c lightning_bugs/constraints.txt     # exact pyocd version, shared with setup.sh
+# pyocd, pinned by the constraints file
+pyocd

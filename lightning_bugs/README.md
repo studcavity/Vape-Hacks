@@ -70,7 +70,7 @@ Beat `n` falls at Unix time `epoch + n × period`. Every device synced against a
 
 ## Build and flash wrapper
 
-First-time setup: in a `claude_sandbox` session nothing needs running by hand. The root `claude_sandbox_deps.yaml` installs `python3-venv` and `libusb` (apt) and runs `tools/setup.sh` at every launch (no root; it installs the pinned `arduino-cli`, the py32duino core and toolchain, and the pyocd venv with the FT232R plugin, and is quick when already done). Then `export PATH="$HOME/.local/bin:$PWD/.venv/bin:$PATH"`. On your own machine the script refuses to run unless you pass `--i-know-this-modifies-my-system`; it then keeps everything under `lightning_bugs/.tools/` (git-ignored) and `.venv`, never touches `~/.local/bin`, `~/.arduino15` or your arduino-cli config, writes only pip's and pyocd's package caches outside the repo, and prints the `PATH` and `ARDUINO_DIRECTORIES_*` exports to use afterwards (Linux only; `lb_flash.py` honours `ARDUINO_DIRECTORIES_DATA`). See `assessments/toolchain.md`.
+First-time setup: in a `claude_sandbox` session nothing needs running by hand. The root `claude_sandbox_deps.yaml` installs `python3-venv` and `libusb` (apt) and runs `tools/setup.sh` at every launch (no root; it installs the pinned `arduino-cli`, the py32duino core and toolchain, and the pyocd venv, and is quick when already done). Then `export PATH="$HOME/.local/bin:$PWD/.venv/bin:$PATH"`. On your own machine the script refuses to run unless you pass `--i-know-this-modifies-my-system`; it then keeps everything under `lightning_bugs/.tools/` (git-ignored) and `.venv`, never touches `~/.local/bin`, `~/.arduino15` or your arduino-cli config, writes only pip's and pyocd's package caches outside the repo, and prints the `PATH` and `ARDUINO_DIRECTORIES_*` exports to use afterwards (Linux only; `lb_flash.py` honours `ARDUINO_DIRECTORIES_DATA`). See `assessments/toolchain.md`.
 
 `tools/lb_flash.py` implements step 3 of `assessments/swd-recovery.md`. Needs `arduino-cli` (with the py32duino core) and `pyocd`.
 
@@ -83,20 +83,12 @@ python3 tools/lb_flash.py -u <probe> flash               # sealed unit: only can
 
 It refuses to build if the sketch mentions PA13/PA14, raw GPIOA mode/AF writes, STOP/STANDBY, deep-sleep bits, flash/option-byte access, RCC clock changes or DBGMCU (waive one line with `// lb-allow-swd-risk`). After building it checks the ELF for forbidden HAL symbols and the `.bin` for flash-unlock keys. After flashing it resets the chip and confirms it can reattach over SWD in the guard, after the guard, and 30 s later. The `--canary` flag is your declaration that the unit is recoverable; builds that pass are recorded by hash in `.lb_canary.json` (git-ignored). The default `--fqbn` is `PY32Duino:PY32:GenF030:pnum=PY32F030x8`.
 
-## Debug probes (two supported stacks)
+## Debug probe
 
-Both stacks are supported for now, and every change is made for both (see "Probe parity" in the repo's `CLAUDE.md`):
-
-| | A: Raspberry Pi Pico | B: FTDI FT232R |
-|---|---|---|
-| Hardware | Pico with debug-probe (CMSIS-DAP) firmware, USB `2e8a:000c` | FT232R USB-UART board, USB `0403:6001`, plus a ~470 ohm resistor |
-| Driver | pyocd built-in | `probes/ft232r` plugin (installed by `tools/setup.sh`) |
-| Select | `--probe <id>` or let pyocd pick the only probe | `--probe ft232r:` (opt-in, never auto-picked) |
-| Speed | USB CMSIS-DAP | slower: bit-bang, 1 USB round trip per batch |
-| Status | used for the original work | simulated only; not yet tried on hardware |
-
-`lb_flash.py` and `lb_sync.py` do not know which one is attached. Wiring, options and the hardware
-bring-up checklist for B are in `probes/ft232r/README.md`.
+The supported probe is a Raspberry Pi Pico running debug-probe (CMSIS-DAP) firmware (USB `2e8a:000c`), used
+through pyocd's built-in driver. Nothing needs configuring: with one probe attached pyocd picks it. To be
+explicit (or with several probes), find its ID with `python3 host/lb_sync.py list` (or `pyocd list`) and pass
+`--probe <id>` / `-u <id>` to `lb_flash.py` and `lb_sync.py`. They do not know what kind of probe it is.
 
 ## Usage
 

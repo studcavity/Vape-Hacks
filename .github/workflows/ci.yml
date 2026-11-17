@@ -68,22 +68,3 @@ jobs:
       # Whole suite once more, exactly as a developer would run it.
       - run: python -m pytest
 
-  ft232r-probe:
-    needs: unit
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        include:
-          - {os: ubuntu-24.04, python-version: "3.10"}
-          - {os: ubuntu-24.04, python-version: "3.12"}
-          - {os: ubuntu-26.04, python-version: "3.12"}
-          - {os: ubuntu-26.04, python-version: "3.14"}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with: {python-version: "${{ matrix.python-version }}", cache: pip, cache-dependency-path: requirements-dev.txt}
-      - run: pip install -r requirements-dev.txt
-      # FT232R probe plugin vs a pin-level simulated SW-DP: wire, transport, SWD, probe, pyocd DebugPort,
-      # lb_sync. Needs no adaptor. (Stack A, the Pico, uses pyocd's own drivers: nothing to build.)
-      - run: python -m pytest lightning_bugs/tests/ft232r
-      - run: python -m pyocd_ft232r check || test $? -eq 1    # CLI runs; exits 1 when no adaptor is present

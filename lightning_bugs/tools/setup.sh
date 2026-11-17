@@ -2,8 +2,7 @@
 # Installs everything lb_flash.py needs, without root and without distro packages:
 #   - arduino-cli (pinned, checksum-verified release tarball)
 #   - the py32duino core (+ its toolchain and CMSIS) via arduino-cli
-#   - a Python venv (lightning_bugs/.venv) with pyocd and pyftdi (versions pinned in constraints.txt)
-#     and the FT232R probe plugin
+#   - a Python venv (lightning_bugs/.venv) with pyocd (version pinned in constraints.txt)
 # Safe to re-run. See assessments/toolchain.md for why.
 #
 # Two modes. Both are hazardous outside a sandbox (they download and run tools and write files), so the
@@ -84,7 +83,7 @@ fi
 arduino-cli core update-index --additional-urls "$INDEX_URL"
 arduino-cli core install "$CORE" --additional-urls "$INDEX_URL"
 
-# pyocd and pyftdi are pinned in constraints.txt (shared with CI); re-applied on every run so an
+# pyocd is pinned in constraints.txt (shared with CI); re-applied on every run so an
 # older venv moves to the pinned versions when the pin changes.
 PIP_CONSTRAINT="$ROOT/constraints.txt"
 export PIP_CONSTRAINT
@@ -92,10 +91,7 @@ if [ ! -x "$ROOT/.venv/bin/pyocd" ]; then
   python3 -m venv "$ROOT/.venv"
   "$ROOT/.venv/bin/pip" install -q --upgrade pip
 fi
-"$ROOT/.venv/bin/pip" install -q pyocd                         # stack A needs only pyocd
-# Second supported probe stack: FT232R bit-bang plugin (probes/ft232r). Both stacks stay supported;
-# see "Probe parity" in CLAUDE.md. Editable, so edits to the plugin take effect without reinstalling.
-"$ROOT/.venv/bin/pip" install -q -e "$ROOT/probes/ft232r"
+"$ROOT/.venv/bin/pip" install -q pyocd
 "$ROOT/.venv/bin/pyocd" pack update >/dev/null 2>&1 || true
 "$ROOT/.venv/bin/pyocd" pack install py32f030x8 || echo "note: pack install failed; run '.venv/bin/pyocd pack find py32f030' and install the match" >&2
 

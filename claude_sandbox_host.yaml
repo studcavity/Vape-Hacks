@@ -3,16 +3,10 @@
 # Read by claude_sandbox's sandbox_host.py from the default branch; separate from claude_sandbox_deps.yaml
 # (old launchers reject unknown keys there). Nothing here affects the image cache.
 #
-# Both probe stacks are supported, so both are requested (CLAUDE.md, "Probe parity"). Keep this list
-# and lightning_bugs/probes/ft232r/README.md in step; tests/test_sandbox_host.py guards it.
+# The one supported probe is the Pico debug probe (CLAUDE.md, "Debug probe"); tests/test_sandbox_host.py guards it.
 usb:
-  - name: pico-probe                 # stack A
+  - name: pico-probe
     vendor_id: "2e8a"
     product_id: "000c"
     description: Raspberry Pi Pico debug probe (CMSIS-DAP), SWD to the target
     tools: [pyocd]
-  - name: ft232r-adaptor             # stack B
-    vendor_id: "0403"
-    product_id: "6001"
-    description: FTDI FT232R USB-UART adaptor, SWD by bit-bang through the pyocd ft232r plugin
-    tools: [pyocd, pyocd-ft232r]
