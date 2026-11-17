@@ -122,6 +122,8 @@ GND:   Pico GND -> a GND pin of the breakout
   pull-downs on A5/B5 but says that is probably unnecessary; if you leave them, the stronger external pull-ups
   (or lower `--frequency`) are what to try first.
 - Take a backup first: `python3 tools/lb_flash.py -u <probe> dump`.
+- A similar chip's author needed resistors, a slower clock and a one-off `edbg` wake-up to connect; see
+  `assessments/py32c642-prior-art.md` (untried on our unit).
 
 ## Usage
 
