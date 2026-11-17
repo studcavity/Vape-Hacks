@@ -5,6 +5,7 @@ Implements step 3 of assessments/swd-recovery.md:
 
   check   scan the sketch source for things that can cost us SWD
   build   run the check, then compile with arduino-cli (and check the binary)
+  dump    read the whole flash twice over SWD, compare, and save it (do this before flashing a unit)
   flash   run check + build, flash over SWD, then confirm we can still reconnect
           (in the boot guard, after the guard, and 30 s later)
 
@@ -42,6 +43,10 @@ sys.path.insert(0, str(ROOT / "host"))
 DEFAULT_FQBN = "PY32Duino:PY32:GenF030:pnum=PY32F030x8"
 DEFAULT_TARGET = "py32f030x8"
 DEFAULT_FREQ = 500_000
+FLASH_BASE = 0x0800_0000
+FLASH_SIZE = 64 * 1024           # PY32F030x8; override with `dump --size`
+DUMP_DIR = ROOT / "backups"      # git-ignored (*.bin); copy dumps somewhere durable
+DUMP_CHUNK = 1024
 
 ALLOW = "lb-allow-swd-risk"   # put in a comment on the same line to waive a rule
 
@@ -242,6 +247,47 @@ def cmd_flash(args) -> None:
     log("flash ok")
 
 
+# ─── dump ────────────────────────────────────────────────────────────────────
+def read_flash(args, size: int) -> bytes:
+    """One pass over the flash through an attach-only session (no halt, no reset, no unlock)."""
+    import lb_sync
+    ns = argparse.Namespace(probe=args.probe, frequency=args.frequency, target=args.target)
+    try:
+        with lb_sync.open_session(ns) as session:
+            target = session.board.target
+            out = bytearray()
+            for off in range(0, size, DUMP_CHUNK):
+                out += bytes(target.read_memory_block8(FLASH_BASE + off, min(DUMP_CHUNK, size - off)))
+            return bytes(out)
+    except Fail:
+        raise
+    except Exception as e:
+        raise Fail(f"could not read flash over SWD: {e}")
+
+
+def cmd_dump(args) -> Path:
+    size = args.size
+    first, second = read_flash(args, size), read_flash(args, size)
+    if first != second:
+        raise Fail("two reads of the flash differ: unstable SWD link (check wiring, lower --frequency); nothing saved")
+    if len(set(first)) == 1:
+        raise Fail(f"flash reads as all 0x{first[0]:02X}: the chip is blank, read-protected or the read failed; "
+                   "nothing saved. This is NOT a usable backup")
+    digest = hashlib.sha256(first).hexdigest()
+    if args.output:
+        out = Path(args.output)
+    else:
+        DUMP_DIR.mkdir(exist_ok=True)
+        out = DUMP_DIR / f"dump_{time.strftime('%Y%m%dT%H%M%S')}_{digest[:12]}.bin"
+    if out.exists():
+        raise Fail(f"{out} already exists; refusing to overwrite a backup")
+    out.write_bytes(first)
+    log(f"dumped {size} bytes from 0x{FLASH_BASE:08x}, two identical reads, sha256 {digest}")
+    log(f"saved {out}")
+    log("Copy it somewhere durable before this machine goes away (a sandbox's files are lost when it exits).")
+    return out
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--fqbn", default=DEFAULT_FQBN, help=f"arduino-cli board (default {DEFAULT_FQBN})")
@@ -251,13 +297,17 @@ def main() -> int:
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("check", help="source safety check only")
     sub.add_parser("build", help="check, compile, check binary")
+    dp = sub.add_parser("dump", help="read the flash twice, compare, save a backup")
+    dp.add_argument("--output", "-o", help="file to write (default backups/dump_<time>_<sha>.bin; never overwritten)")
+    dp.add_argument("--size", type=lambda s: int(s, 0), default=FLASH_SIZE,
+                    help=f"bytes to read from 0x{FLASH_BASE:08x} (default {FLASH_SIZE})")
     fp = sub.add_parser("flash", help="check, build, flash, verify reconnect")
     fp.add_argument("--canary", action="store_true", help="this unit is a canary (recoverable without opening)")
     fp.add_argument("--yes", action="store_true", help="don't prompt before flashing a sealed unit")
     fp.add_argument("--bin", help="flash an existing .bin instead of building")
     args = ap.parse_args()
     try:
-        {"check": cmd_check, "build": cmd_build, "flash": cmd_flash}[args.cmd](args)
+        {"check": cmd_check, "build": cmd_build, "dump": cmd_dump, "flash": cmd_flash}[args.cmd](args)
     except Fail as e:
         log(f"error: {e}")
         return 1

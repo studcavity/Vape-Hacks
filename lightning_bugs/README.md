@@ -77,9 +77,12 @@ First-time setup: in a `claude_sandbox` session nothing needs running by hand. T
 ```sh
 python3 tools/lb_flash.py check                          # source safety scan only
 python3 tools/lb_flash.py [--fqbn <board>] build         # check + compile + binary check
+python3 tools/lb_flash.py -u <probe> dump                # back up the unit's flash BEFORE flashing it
 python3 tools/lb_flash.py -u <probe> flash --canary      # flash a canary unit, verify SWD
 python3 tools/lb_flash.py -u <probe> flash               # sealed unit: only canary-tested builds
 ```
+
+`dump` reads the 64 KB of flash (`0x08000000`) twice over SWD without halting or resetting the chip, and saves it to `backups/dump_<time>_<sha>.bin` (git-ignored; copy it somewhere durable) only if both reads are identical and not all `0x00`/`0xFF` (a read-protected chip can look like that, and such a dump is not a backup). It never overwrites a file. `--output` picks the file and `--size` the length. It does not stop `flash` from running without a backup. (`pyocd read`, which an old comment in `PY32F030EK28.ino` suggests, does not exist in the pinned pyocd.)
 
 It refuses to build if the sketch mentions PA13/PA14, raw GPIOA mode/AF writes, STOP/STANDBY, deep-sleep bits, flash/option-byte access, RCC clock changes or DBGMCU (waive one line with `// lb-allow-swd-risk`). After building it checks the ELF for forbidden HAL symbols and the `.bin` for flash-unlock keys. After flashing it resets the chip and confirms it can reattach over SWD in the guard, after the guard, and 30 s later. The `--canary` flag is your declaration that the unit is recoverable; builds that pass are recorded by hash in `.lb_canary.json` (git-ignored). The default `--fqbn` is `PY32Duino:PY32:GenF030:pnum=PY32F030x8`.
 

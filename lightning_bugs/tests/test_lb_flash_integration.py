@@ -179,3 +179,88 @@ def test_flash_existing_bin_is_checked_first(flasher, tmp_path):
     flasher(canary=True, bin=str(good))
     assert len(pyocd_calls(flasher, "flash")) == 1
     assert not any(c[0] == "arduino-cli" for c in flasher.calls()), "--bin must skip the build"
+
+
+# ─── dump (in-process, SWD reads stubbed) ────────────────────────────────────
+@pytest.fixture
+def dumper(tmp_path, monkeypatch):
+    monkeypatch.setattr(lb_flash, "DUMP_DIR", tmp_path / "backups")
+    image = bytes(range(256)) * 4
+    reads = []
+
+    def fake_read(args, size):
+        reads.append(size)
+        return reads_data[len(reads) - 1] if reads_data else image[:size]
+    reads_data = []
+    monkeypatch.setattr(lb_flash, "read_flash", fake_read)
+
+    def run(output=None, size=1024):
+        args = argparse.Namespace(probe=None, frequency=500_000, target="py32f030x8", output=output, size=size)
+        return lb_flash.cmd_dump(args)
+    run.image, run.reads, run.queue, run.dir = image, reads, reads_data, tmp_path / "backups"
+    return run
+
+
+def test_dump_reads_twice_and_saves_identical_bytes(dumper):
+    out = dumper()
+    assert dumper.reads == [1024, 1024]
+    assert out.read_bytes() == dumper.image and out.parent == dumper.dir
+    assert out.name.startswith("dump_") and out.suffix == ".bin"
+
+
+def test_dump_refuses_when_reads_differ(dumper):
+    dumper.queue += [b"\x01\x02" * 8, b"\x01\x03" * 8]
+    with pytest.raises(lb_flash.Fail, match="differ"):
+        dumper()
+    assert not dumper.dir.exists() or not list(dumper.dir.iterdir())
+
+
+@pytest.mark.parametrize("fill", [0x00, 0xFF])
+def test_dump_refuses_blank_or_protected_flash(dumper, fill):
+    dumper.queue += [bytes([fill]) * 1024] * 2
+    with pytest.raises(lb_flash.Fail, match="NOT a usable backup"):
+        dumper()
+    assert not dumper.dir.exists() or not list(dumper.dir.iterdir())
+
+
+def test_dump_never_overwrites_a_backup(dumper, tmp_path):
+    target = tmp_path / "mine.bin"
+    target.write_bytes(b"precious")
+    with pytest.raises(lb_flash.Fail, match="already exists"):
+        dumper(output=str(target))
+    assert target.read_bytes() == b"precious"
+
+
+def test_read_flash_attaches_without_halt_and_reads_in_chunks(monkeypatch):
+    import lb_sync
+    calls = []
+
+    class Target:
+        def read_memory_block8(self, addr, n):
+            calls.append((addr, n))
+            return [1] * n
+
+    class Session:
+        board = type("B", (), {"target": Target()})()
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+    monkeypatch.setattr(lb_sync, "open_session", lambda ns: Session())
+    args = argparse.Namespace(probe="X", frequency=1, target="t")
+    data = lb_flash.read_flash(args, 2500)
+    assert len(data) == 2500
+    assert calls == [(0x08000000, 1024), (0x08000400, 1024), (0x08000800, 452)]
+
+
+def test_read_flash_reports_swd_failure_as_fail(monkeypatch):
+    import lb_sync
+
+    def boom(ns):
+        raise lb_sync.SyncError("no debug probe found")
+    monkeypatch.setattr(lb_sync, "open_session", boom)
+    with pytest.raises(lb_flash.Fail, match="could not read flash"):
+        lb_flash.read_flash(argparse.Namespace(probe=None, frequency=1, target="t"), 16)
+
+
+def test_cli_dump_is_a_subcommand(tree):
+    r = cli(tree, "dump", "--help")
+    assert r.returncode == 0 and "--output" in r.stdout and "--size" in r.stdout
