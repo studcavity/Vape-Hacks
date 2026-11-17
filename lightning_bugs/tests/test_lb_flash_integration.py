@@ -194,9 +194,9 @@ def dumper(tmp_path, monkeypatch):
     reads_data = []
     monkeypatch.setattr(lb_flash, "read_flash", fake_read)
 
-    def run(output=None, size=1024, passes=2):
+    def run(output=None, size=1024, passes=2, poll=False):
         args = argparse.Namespace(probe=None, frequency=500_000, target="py32f030x8", output=output, size=size,
-                                  passes=passes)
+                                  passes=passes, poll=poll, poll_timeout=5.0)
         return lb_flash.cmd_dump(args)
     run.image, run.reads, run.queue, run.dir = image, reads, reads_data, tmp_path / "backups"
     return run
@@ -291,3 +291,93 @@ def test_dump_rejects_zero_passes(dumper):
     with pytest.raises(lb_flash.Fail, match="at least 1"):
         dumper(passes=0)
     assert dumper.reads == []
+
+
+# ─── dump --poll ─────────────────────────────────────────────────────────────
+@pytest.fixture
+def poller(dumper, monkeypatch):
+    """dumper plus a scripted read_flash_passes: each queued item is an Exception to raise or a list of images."""
+    script, calls = [], []
+
+    def fake(args, size, passes=1):
+        calls.append(passes)
+        item = script.pop(0)
+        if isinstance(item, BaseException):
+            raise item
+        return item
+    monkeypatch.setattr(lb_flash, "read_flash_passes", fake)
+    monkeypatch.setattr(lb_flash.time, "sleep", lambda s: None)
+    dumper.script, dumper.calls = script, calls
+    return dumper
+
+
+def test_poll_retries_until_the_chip_answers_then_saves(poller):
+    img = poller.image[:1024]
+    poller.script += [lb_flash.Fail("no answer")] * 3 + [[img, img]]
+    out = poller(poll=True)
+    assert out.read_bytes() == img
+    assert poller.calls == [2, 2, 2, 2], "every attempt asks for all passes in one session"
+
+
+def test_poll_gives_up_after_the_timeout(poller, monkeypatch):
+    clock = iter(x * 2.0 for x in range(100))
+    monkeypatch.setattr(lb_flash.time, "monotonic", lambda: next(clock))
+    poller.script += [lb_flash.Fail("Target not detected")] * 50
+    with pytest.raises(lb_flash.Fail, match=r"no usable read in 5 s .*Target not detected"):
+        poller(poll=True)
+    assert not poller.dir.exists() or not list(poller.dir.iterdir())
+
+
+def test_poll_does_not_retry_a_fatal_error(poller):
+    poller.script += [lb_flash.Fatal("no debug probe found"), [b"x" * 1024] * 2]
+    with pytest.raises(lb_flash.Fatal, match="no debug probe"):
+        poller(poll=True)
+    assert poller.calls == [2]
+
+
+def test_poll_still_checks_the_reads_agree_and_are_not_blank(poller):
+    poller.script += [[b"\x01" * 1024, b"\x02" * 1024]]
+    with pytest.raises(lb_flash.Fail, match="differ"):
+        poller(poll=True)
+    poller.script += [[b"\xff" * 1024] * 2]
+    with pytest.raises(lb_flash.Fail, match="NOT a usable backup"):
+        poller(poll=True)
+
+
+def test_poll_single_pass_is_marked_unverified(poller):
+    poller.script += [[poller.image[:1024]]]
+    out = poller(poll=True, passes=1)
+    assert out.stem.endswith("_unverified") and poller.calls == [1]
+
+
+def test_poll_restores_the_pyocd_log_level_and_reports_ctrl_c(poller):
+    import logging
+    before = logging.getLogger("pyocd").level
+    poller.script += [KeyboardInterrupt()]
+    with pytest.raises(lb_flash.Fail, match="interrupted after 1 attempts"):
+        poller(poll=True)
+    assert logging.getLogger("pyocd").level == before
+
+
+def test_read_flash_passes_reads_every_pass_in_one_session(monkeypatch):
+    import lb_sync
+    opened, reads = [], []
+
+    class Target:
+        def read_memory_block8(self, addr, n):
+            reads.append(addr)
+            return [7] * n
+
+    class Session:
+        board = type("B", (), {"target": Target()})()
+        def __enter__(self): opened.append(1); return self
+        def __exit__(self, *a): return False
+    monkeypatch.setattr(lb_sync, "open_session", lambda ns: Session())
+    images = lb_flash.read_flash_passes(argparse.Namespace(probe=None, frequency=1, target="t"), 2048, 3)
+    assert len(images) == 3 and all(len(i) == 2048 for i in images) and len(opened) == 1
+    assert len(reads) == 6
+
+
+def test_cli_dump_offers_poll(tree):
+    r = cli(tree, "dump", "--help")
+    assert "--poll" in r.stdout and "--poll-timeout" in r.stdout

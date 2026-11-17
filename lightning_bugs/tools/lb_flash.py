@@ -80,6 +80,10 @@ class Fail(Exception):
     pass
 
 
+class Fatal(Fail):
+    """A failure that retrying cannot fix (no probe, pyocd missing). `dump --poll` gives up on these at once."""
+
+
 def log(msg: str) -> None:
     print(msg, flush=True)
 
@@ -248,32 +252,76 @@ def cmd_flash(args) -> None:
 
 
 # ─── dump ────────────────────────────────────────────────────────────────────
-def read_flash(args, size: int) -> bytes:
-    """One pass over the flash through an attach-only session (no halt, no reset, no unlock)."""
+def read_flash_passes(args, size: int, passes: int = 1) -> list[bytes]:
+    """`passes` reads of the flash in ONE attach-only session (no halt, no reset, no unlock). Several reads in
+    one session matter when the link only exists for a short window."""
     import lb_sync
     ns = argparse.Namespace(probe=args.probe, frequency=args.frequency, target=args.target)
     try:
         with lb_sync.open_session(ns) as session:
             target = session.board.target
-            out = bytearray()
-            for off in range(0, size, DUMP_CHUNK):
-                out += bytes(target.read_memory_block8(FLASH_BASE + off, min(DUMP_CHUNK, size - off)))
-            return bytes(out)
+            images = []
+            for _ in range(passes):
+                out = bytearray()
+                for off in range(0, size, DUMP_CHUNK):
+                    out += bytes(target.read_memory_block8(FLASH_BASE + off, min(DUMP_CHUNK, size - off)))
+                images.append(bytes(out))
+            return images
+    except lb_sync.SyncError as e:       # no probe, or pyocd not installed: nothing to wait for
+        raise Fatal(f"could not read flash over SWD: {e}")
     except Fail:
         raise
     except Exception as e:
         raise Fail(f"could not read flash over SWD: {e}")
 
 
+def read_flash(args, size: int) -> bytes:
+    """One pass over the flash in its own session."""
+    return read_flash_passes(args, size, 1)[0]
+
+
+def poll_flash(args, size: int, passes: int, timeout: float) -> list[bytes]:
+    """Retry connecting in this one process (about 85 ms per attempt, against ~1 s when a shell loop starts
+    Python each time) until the chip answers, then take all `passes` reads in that same session. Meant for a
+    unit that only answers SWD for a short window after being woken."""
+    import logging
+    pyocd_log = logging.getLogger("pyocd")
+    old_level, deadline = pyocd_log.level, time.monotonic() + timeout
+    log(f"polling for the chip for up to {timeout:.0f} s: wake the unit now (slide switch). Ctrl-C to stop.")
+    attempts, last = 0, "no answer"
+    pyocd_log.setLevel(logging.CRITICAL)      # every failed attempt would otherwise print pyocd's error
+    try:
+        while True:
+            attempts += 1
+            try:
+                images = read_flash_passes(args, size, passes)
+                log(f"connected on attempt {attempts}")
+                return images
+            except Fatal:
+                raise
+            except Fail as e:
+                last = str(e)
+            if time.monotonic() >= deadline:
+                raise Fail(f"no usable read in {timeout:.0f} s ({attempts} attempts); last error: {last}")
+            time.sleep(0.01)
+    except KeyboardInterrupt:
+        raise Fail(f"interrupted after {attempts} attempts; last error: {last}")
+    finally:
+        pyocd_log.setLevel(old_level)
+
+
 def cmd_dump(args) -> Path:
     size, passes = args.size, args.passes
     if passes < 1:
         raise Fail("--passes must be at least 1")
-    first = read_flash(args, size)
-    for _ in range(passes - 1):
-        if read_flash(args, size) != first:
-            raise Fail("two reads of the flash differ: unstable SWD link (check wiring, lower --frequency); "
-                       "nothing saved")
+    if args.poll:
+        images = poll_flash(args, size, passes, args.poll_timeout)
+    else:
+        images = [read_flash(args, size) for _ in range(passes)]
+    first = images[0]
+    if any(img != first for img in images[1:]):
+        raise Fail("two reads of the flash differ: unstable SWD link (check wiring, lower --frequency); "
+                   "nothing saved")
     if len(set(first)) == 1:
         raise Fail(f"flash reads as all 0x{first[0]:02X}: the chip is blank, read-protected or the read failed; "
                    "nothing saved. This is NOT a usable backup")
@@ -312,6 +360,11 @@ def main() -> int:
     dp.add_argument("--passes", type=int, default=2,
                     help="reads to take and compare (default 2). 1 is for a short SWD window: the file is named "
                          "*_unverified.bin; confirm it with a second dump")
+    dp.add_argument("--poll", action="store_true",
+                    help="keep retrying the connection in this process (about 12 attempts/s) until the chip "
+                         "answers, then read at once. For a unit that only answers SWD briefly after waking")
+    dp.add_argument("--poll-timeout", type=float, default=120.0, metavar="SECONDS",
+                    help="give up after this long with --poll (default 120)")
     fp = sub.add_parser("flash", help="check, build, flash, verify reconnect")
     fp.add_argument("--canary", action="store_true", help="this unit is a canary (recoverable without opening)")
     fp.add_argument("--yes", action="store_true", help="don't prompt before flashing a sealed unit")
