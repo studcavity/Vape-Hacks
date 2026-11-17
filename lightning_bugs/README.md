@@ -95,8 +95,9 @@ explicit (or with several probes), find its ID with `python3 host/lb_sync.py lis
 
 ### Wiring the Pico to the unit
 
-Source: the prior-art project in `PY32F030EK28 - Geek Bar Pulse X Jam/README.md`, which programmed this same
-kind of unit. **Not yet tried on our canary:** treat it as a starting point and check it with `pyocd list` and
+Sources: the prior-art project in `PY32F030EK28 - Geek Bar Pulse X Jam/README.md`, the schematic of the matching
+board (schlae/VapeRE `BD0061`, `BD0061.kicad_sch`: PY32F030K2, USB-C `J1`) and dwaskevich/Geek_Bar_Pulse_hijack (same
+maker, J-Link). **Not yet tried on our canary:** treat it as a starting point and check it with `pyocd list` and
 `lb_flash.py dump` before anything else.
 
 The unit's SWD pins (PA13 SWDIO, PA14 SWCLK) are brought out to the USB-C port's **A5 and B5** (the CC pins), so
@@ -105,9 +106,14 @@ the case does not need opening. Use a USB-C breakout board and wire:
 ```
 SWCLK: Pico GP2 -> ~240 ohm -> B5 -> PA14
 SWDIO: Pico GP3 -> ~240 ohm -> A5 -> PA13
-GND:   Pico GND -> a GND pin of the breakout
+GND:   Pico GND -> USB-C A12 (B12 is also GND)
 (prior art also pulls both lines up to 3.3V with 10k; see below)
 ```
+
+Per the VapeRE schematic, **GND is A12 and B12**, VBUS is A9/B9, and the SWD lines are on the CC pins, each with a
+5.1k resistor to ground (R1, R2). In its drawing SWDIO is on B5 and SWCLK on A5 (read from the KiCad file, so
+verify with a meter); the Jam prior art wires them the other way round. Both are right for one plug orientation,
+so if it does not connect, swap the two signal wires (or flip the connector) before suspecting anything else.
 
 - GP2 = SWCLK and GP3 = SWDIO are the Pico debug-probe firmware's default pins (`debugprobe` v2.3.1,
   `include/board_pico_config.h`). GP1 is its target-reset (nRESET) output, unused here.
@@ -115,12 +121,21 @@ GND:   Pico GND -> a GND pin of the breakout
   ~5 V on USB).
 - Power the unit from its own battery. Do not connect the Pico's VBUS/VSYS to the unit, and do not plug a charger
   or USB host into the breakout while the probe is wired to A5/B5 (their CC lines would drive the SWD pins).
-- If it does not connect, flip the USB-C connector over: A5/B5 are swapped.
+- **The unit sleeps, and SWD is unavailable while it does** (hijack README: normally in deep sleep or stop; the slide
+  switch wakes it and opens a "small connect window", and plugging in a charger opens another). Run the probe command
+  in a retry loop, then move the switch, so an attempt lands in the window. `dump` reads the flash twice, which needs
+  the link to stay up the whole time; a very slow `--frequency` stretches that, so do not go lower than needed.
+  The 500 kHz default is the speed hijack's own J-Link script uses (`speed 500`).
+- The unit's 5.1k CC pull-downs (R1/R2 above, "5.1k pull-downs on CC1/CC2" in hijack) are on a stock unit, which is
+  why the Jam author removed theirs. A 10k pull-up to 3.3 V against a 5.1k pull-down only divides to about 1.1 V,
+  so the external pull-ups cannot lift an idle line to a logic high while those resistors are present.
+  Whether the link works with them in place is untested here.
+- The Pico has no target-voltage input: it always drives 3.3 V. hijack's J-Link needed its VTref set to 3300 mV by
+  hand for the same reason (unit runs from the battery, about 3.3 to 4.2 V).
 - Pull-ups: debugprobe v2.3.1 enables the RP2040's internal pull-up on SWDIO only (`gpio_pull_up(PROBE_PIN_SWDIO)`
   in `probe.pio`); SWCLK is an actively driven output with none. That internal pull-up is weak (tens of kilohms), so
-  the prior art's external 10k pull-ups are stronger, not built in. The prior art removed the unit's own 2.5k
-  pull-downs on A5/B5 but says that is probably unnecessary; if you leave them, the stronger external pull-ups
-  (or lower `--frequency`) are what to try first.
+  the prior art's external 10k pull-ups are stronger, not built in. The Jam prior art removed the unit's own
+  pull-downs on A5/B5 (it recalls 2.5k; the schematic and hijack say 5.1k) but says that is probably unnecessary.
 - Take a backup first: `python3 tools/lb_flash.py -u <probe> dump`.
 - A similar chip's author needed resistors, a slower clock and a one-off `edbg` wake-up to connect; see
   `assessments/py32c642-prior-art.md` (untried on our unit).
