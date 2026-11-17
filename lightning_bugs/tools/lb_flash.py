@@ -5,7 +5,11 @@ Implements step 3 of assessments/swd-recovery.md:
 
   check   scan the sketch source for things that can cost us SWD
   build   run the check, then compile with arduino-cli (and check the binary)
-  flash   run check + build, flash over SWD, then confirm we can still reconnect
+  options read the option bytes (RDP, NRST, watchdog, BOR) and DBGMCU_CR over SWD; read-only
+  watch   poll the chip's SWD debug port ~800 times a second and report when it answers and for how long
+          (finds out whether a connect window exists and how long it is; reads no flash, halts nothing)
+  dump    read the whole flash over SWD (twice by default, compared), and save it (do this before flashing a unit)
+  flash   run check + build, (optionally --wait for the chip to answer,) flash over SWD, then confirm we can still reconnect
           (in the boot guard, after the guard, and 30 s later)
 
 Canary policy: a build must be flashed to a canary unit (one you can power-cycle
@@ -42,6 +46,10 @@ sys.path.insert(0, str(ROOT / "host"))
 DEFAULT_FQBN = "PY32Duino:PY32:GenF030:pnum=PY32F030x8"
 DEFAULT_TARGET = "py32f030x8"
 DEFAULT_FREQ = 500_000
+FLASH_BASE = 0x0800_0000
+FLASH_SIZE = 64 * 1024           # PY32F030x8; override with `dump --size`
+DUMP_DIR = ROOT / "backups"      # git-ignored (*.bin); copy dumps somewhere durable
+DUMP_CHUNK = 1024
 
 ALLOW = "lb-allow-swd-risk"   # put in a comment on the same line to waive a rule
 
@@ -73,6 +81,10 @@ UNLOCK_KEYS = {
 
 class Fail(Exception):
     pass
+
+
+class Fatal(Fail):
+    """A failure that retrying cannot fix (no probe, pyocd missing). `dump --poll` gives up on these at once."""
 
 
 def log(msg: str) -> None:
@@ -218,6 +230,11 @@ def cmd_flash(args) -> None:
         if input("Flash a SEALED unit with this canary-tested build? [y/N] ").strip().lower() != "y":
             raise Fail("aborted")
 
+    if args.wait:
+        # Start the flash inside the window: wait until the chip answers, then launch pyocd at once. This only
+        # reads one word, so it is safe to repeat; the flash itself is run once, never retried (its exit code
+        # cannot tell "never connected" from "failed halfway").
+        poll_until(lambda: with_target(args, lambda target: target.read32(FLASH_BASE), "the chip"), args.wait)
     probe = ["-u", args.probe] if args.probe else []
     cmd = [pyocd, "flash", "-t", args.target, "-f", str(args.frequency), *probe,
            "--base-address", "0x08000000", str(binf)]
@@ -242,6 +259,316 @@ def cmd_flash(args) -> None:
     log("flash ok")
 
 
+# ─── dump ────────────────────────────────────────────────────────────────────
+def with_target(args, fn, what: str = "flash", extra_options: dict | None = None):
+    """Open an attach-only session (no halt, no reset, no unlock), run fn(target), close it. Failures that
+    retrying cannot fix (no probe, pyocd missing) are raised as Fatal. Note that pyocd's Puya pack still runs its
+    DebugCoreStart sequence on connect: it sets DHCSR.C_DEBUGEN, RCC_APBENR1.DBGEN and writes DBGMCU_CR (DBG_STOP) and
+    the freeze registers. Pass extra_options to change that (see cmd_options)."""
+    import lb_sync
+    ns = argparse.Namespace(probe=args.probe, frequency=args.frequency, target=args.target,
+                            extra_options=extra_options)
+    try:
+        with lb_sync.open_session(ns) as session:
+            return fn(session.board.target)
+    except lb_sync.SyncError as e:       # no probe, or pyocd not installed: nothing to wait for
+        raise Fatal(f"could not read {what} over SWD: {e}")
+    except Fail:
+        raise
+    except Exception as e:
+        raise Fail(f"could not read {what} over SWD: {e}")
+
+
+def read_flash_passes(args, size: int, passes: int = 1) -> list[bytes]:
+    """`passes` reads of the flash in ONE session. Several reads in one session matter when the link only
+    exists for a short window."""
+    def reads(target):
+        images = []
+        for _ in range(passes):
+            out = bytearray()
+            for off in range(0, size, DUMP_CHUNK):
+                out += bytes(target.read_memory_block8(FLASH_BASE + off, min(DUMP_CHUNK, size - off)))
+            images.append(bytes(out))
+        return images
+    return with_target(args, reads, "flash")
+
+
+def read_flash(args, size: int) -> bytes:
+    """One pass over the flash in its own session."""
+    return read_flash_passes(args, size, 1)[0]
+
+
+def poll_until(attempt, timeout: float):
+    """Call attempt() until it returns, retrying on Fail (about 85 ms per attempt when each one opens a session,
+    against ~1 s when a shell loop starts Python each time). Meant for a unit that only answers SWD for a short
+    window after being woken. Fatal errors, the timeout and Ctrl-C stop it."""
+    import logging
+    pyocd_log = logging.getLogger("pyocd")
+    old_level, deadline = pyocd_log.level, time.monotonic() + timeout
+    log(f"polling for the chip for up to {timeout:.0f} s: wake the unit now (slide switch). Ctrl-C to stop.")
+    attempts, last = 0, "no answer"
+    pyocd_log.setLevel(logging.CRITICAL)      # every failed attempt would otherwise print pyocd's error
+    try:
+        while True:
+            attempts += 1
+            try:
+                result = attempt()
+                log(f"connected on attempt {attempts}")
+                return result
+            except Fatal:
+                raise
+            except Fail as e:
+                last = str(e)
+            if time.monotonic() >= deadline:
+                raise Fail(f"no usable read in {timeout:.0f} s ({attempts} attempts); last error: {last}")
+            time.sleep(0.01)
+    except KeyboardInterrupt:
+        raise Fail(f"interrupted after {attempts} attempts; last error: {last}")
+    finally:
+        pyocd_log.setLevel(old_level)
+
+
+def poll_flash(args, size: int, passes: int, timeout: float) -> list[bytes]:
+    """Poll until the chip answers, then take all `passes` flash reads in that same session."""
+    return poll_until(lambda: read_flash_passes(args, size, passes), timeout)
+
+
+# ─── options (read-only) ─────────────────────────────────────────────────────
+# PY32F030 reference manual v1.3: 4.4 (option bytes at 0x1FFF0E80, each half-word stored with its one's
+# complement), 4.8.6-8 (FLASH_OPTR/SDKR/WRPR at 0x40022020/24/2C), 28.9 (DBG block at 0x40015800).
+OPTION_BASE = 0x1FFF0E80
+OPTION_WORDS = {"user": 0x00, "sdk": 0x04, "word2": 0x08, "wrp": 0x0C}
+FLASH_REGS = 0x4002_2000
+FLASH_OPTR, FLASH_SDKR, FLASH_WRPR = FLASH_REGS + 0x20, FLASH_REGS + 0x24, FLASH_REGS + 0x2C
+RCC_APBENR1 = 0x4002_103C           # bit 27 = DBGEN, the debug module clock enable (reset value 0)
+DBGEN_BIT = 27
+DBG_BASE = 0x4001_5800
+DBG_IDCODE, DBG_CR, DBG_FZ1, DBG_FZ2 = DBG_BASE, DBG_BASE + 4, DBG_BASE + 8, DBG_BASE + 12
+
+
+def read_options(target) -> dict[str, int]:
+    """Every register the `options` command shows, as raw 32-bit words. Reads only; nothing is written."""
+    raw = {name: target.read32(OPTION_BASE + off) for name, off in OPTION_WORDS.items()}
+    raw.update(live_optr=target.read32(FLASH_OPTR), live_sdkr=target.read32(FLASH_SDKR),
+               live_wrpr=target.read32(FLASH_WRPR), rcc_apbenr1=target.read32(RCC_APBENR1))
+    if raw["rcc_apbenr1"] >> DBGEN_BIT & 1:      # the DBG block is only meaningful with its clock on
+        raw.update(dbg_idcode=target.read32(DBG_IDCODE), dbg_cr=target.read32(DBG_CR),
+                   dbg_fz1=target.read32(DBG_FZ1), dbg_fz2=target.read32(DBG_FZ2))
+    return raw
+
+
+def complement_ok(word: int) -> bool:
+    """Option words keep the one's complement of the low half in the high half."""
+    return (word >> 16) == (~word & 0xFFFF)
+
+
+def decode_user_option(lo: int) -> dict:
+    """The low 16 bits of the user option word / FLASH_OPTR (manual 4.8.6)."""
+    return {
+        "RDP": lo & 0xFF, "read_protected": (lo & 0xFF) != 0xAA,
+        "BOR_EN": bool(lo >> 8 & 1), "BOR_LEV": lo >> 9 & 7,
+        "IWDG": "software (starts only if the firmware starts it)" if lo >> 12 & 1 else "HARDWARE (runs from reset)",
+        "WWDG": "software" if lo >> 13 & 1 else "HARDWARE (runs from reset)",
+        "NRST": "GPIO (no reset pin)" if lo >> 14 & 1 else "reset input",
+        "nBOOT1": lo >> 15 & 1,
+    }
+
+
+BOR_THRESHOLDS = ["1.8/1.7", "2.0/1.9", "2.2/2.1", "2.4/2.3", "2.6/2.5", "2.8/2.7", "3.0/2.9", "3.2/3.1"]
+
+
+def format_options(raw: dict[str, int]) -> list[str]:
+    out = ["option bytes (information flash at 0x%08X; low half is the setting, high half its complement):" % OPTION_BASE]
+    for name, off in OPTION_WORDS.items():
+        w = raw[name]
+        ok = "ok" if complement_ok(w) else "COMPLEMENT MISMATCH"
+        out.append(f"  0x{OPTION_BASE + off:08X} {name:5s} 0x{w:08X}  {ok if name in ('user', 'wrp') else ''}".rstrip())
+    u = raw["user"]
+    if not complement_ok(u):
+        out.append("  user option word does not validate: the chip would load its defaults (read protection ON, "
+                   "BOR off); decoding it anyway")
+    d = decode_user_option(u & 0xFFFF)
+    out += [f"  RDP 0x{d['RDP']:02X}: " + ("LEVEL 1, flash is read-protected" if d["read_protected"]
+                                         else "level 0, no read protection"),
+            f"  NRST: {d['NRST']}",
+            f"  IWDG: {d['IWDG']}; WWDG: {d['WWDG']}",
+            "  BOR: " + (f"on, rising/falling threshold {BOR_THRESHOLDS[d['BOR_LEV']]} V" if d["BOR_EN"] else "off"),
+            f"  nBOOT1 bit: {d['nBOOT1']}",
+            f"  write protect word 0x{raw['wrp']:08X}: "
+            + ("none (all 16 sectors unprotected)" if (raw['wrp'] & 0xFFFF) == 0xFFFF
+               else f"sector mask 0x{raw['wrp'] & 0xFFFF:04X} (0 = protected)")]
+    live = {"optr": raw["live_optr"] & 0xFFFF, "from option bytes": u & 0xFFFF}
+    out.append(f"live FLASH_OPTR 0x{raw['live_optr']:08X}" + ("  (matches the option bytes)" if live["optr"] == live["from option bytes"]
+                                                             else "  (DIFFERS from the option bytes: a write is pending a reload)"))
+    en = raw["rcc_apbenr1"]
+    out.append(f"RCC_APBENR1 0x{en:08X}: DBGEN (bit 27) = {en >> DBGEN_BIT & 1}")
+    if "dbg_cr" not in raw:
+        out += ["  the debug clock is off, so DBGMCU was NOT read: it is not meaningful without it, and this command "
+                "writes nothing (it will not switch the clock on).",
+                "  (pyocd's Puya pack normally sets DBGEN and writes DBGMCU_CR = 2 itself on connect, which is why "
+                "an ordinary session always reads DBG_STOP = 1.)"]
+        return out
+    cr, fz1 = raw["dbg_cr"], raw["dbg_fz1"]
+    out += [f"DBGMCU at 0x{DBG_BASE:08X}: IDCODE 0x{raw['dbg_idcode']:08X}, CR 0x{cr:08X}, APB_FZ1 0x{fz1:08X}, "
+            f"APB_FZ2 0x{raw['dbg_fz2']:08X}",
+            f"  DBG_STOP (CR bit 1) = {cr >> 1 & 1}: " + ("SET: SWD should stay alive in stop mode (clocks keep running)"
+                                                       if cr >> 1 & 1 else "clear: stop mode switches the debug clocks off, so SWD goes away in stop"),
+            f"  DBG_IWDG_STOP (FZ1 bit 12) = {fz1 >> 12 & 1}, DBG_WWDG_STOP (bit 11) = {fz1 >> 11 & 1}",
+            "  DBGMCU_CR/FZ1/FZ2 are cleared only by a power-on reset (not a system reset), so a set bit survives resets "
+            "until the battery is disconnected."]
+    return out
+
+
+def cmd_options(args) -> None:
+    # pyocd's Puya pack would otherwise run DebugCoreStart on connect, which writes DHCSR.C_DEBUGEN, DBGEN and
+    # DBGMCU_CR = DBG_STOP: that would set the very bits this command is meant to report.
+    quiet = {"pack.debug_sequences.disabled_sequences": "DebugCoreStart"}
+    attempt = lambda: with_target(args, read_options, "the option bytes", quiet)      # noqa: E731
+    raw = poll_until(attempt, args.timeout) if args.poll else attempt()
+    for line in format_options(raw):
+        log(line)
+
+
+def cmd_dump(args) -> Path:
+    size, passes = args.size, args.passes
+    if passes < 1:
+        raise Fail("--passes must be at least 1")
+    if args.poll:
+        images = poll_flash(args, size, passes, args.poll_timeout)
+    else:
+        images = [read_flash(args, size) for _ in range(passes)]
+    first = images[0]
+    if any(img != first for img in images[1:]):
+        raise Fail("two reads of the flash differ: unstable SWD link (check wiring, lower --frequency); "
+                   "nothing saved")
+    if len(set(first)) == 1:
+        raise Fail(f"flash reads as all 0x{first[0]:02X}: the chip is blank, read-protected or the read failed; "
+                   "nothing saved. This is NOT a usable backup")
+    digest = hashlib.sha256(first).hexdigest()
+    if args.output:
+        out = Path(args.output)
+    else:
+        DUMP_DIR.mkdir(exist_ok=True)
+        out = DUMP_DIR / f"dump_{time.strftime('%Y%m%dT%H%M%S')}_{digest[:12]}{'' if passes > 1 else '_unverified'}.bin"
+    if out.exists():
+        raise Fail(f"{out} already exists; refusing to overwrite a backup")
+    out.write_bytes(first)
+    if passes > 1:
+        log(f"dumped {size} bytes from 0x{FLASH_BASE:08x}, {passes} identical reads, sha256 {digest}")
+    else:
+        log(f"dumped {size} bytes from 0x{FLASH_BASE:08x}, ONE read only (not cross-checked), sha256 {digest}")
+        log("Dump again later and compare the sha256 values before trusting this as a backup.")
+    log(f"saved {out}")
+    log("Copy it somewhere durable before this machine goes away (a sandbox's files are lost when it exits).")
+    return out
+
+
+# ─── watch ───────────────────────────────────────────────────────────────────
+WATCH_GAP_FAILS = 5        # consecutive failed attempts (~6 ms) that end an "answering" window
+DPIDR_CORTEX_M0P = 0x0BB11477
+
+
+def raw_attempt(probe) -> int:
+    """One SWD line reset + JTAG-to-SWD switch + DP IDR read. Returns the DPIDR; raises when nothing ACKs."""
+    probe.swj_sequence(51, 0xFFFFFFFFFFFFFF)
+    probe.swj_sequence(16, 0xE79E)
+    probe.swj_sequence(51, 0xFFFFFFFFFFFFFF)
+    probe.swj_sequence(8, 0x00)
+    return probe.read_dp(0, now=True)
+
+
+def valid_dpidr(v: int) -> bool:
+    """A real DPIDR has bit 0 set; an all-ones read is a floating line, not a chip."""
+    return bool(v & 1) and v != 0xFFFFFFFF
+
+
+def run_watch(probe, timeout: float, clock=time.monotonic, report=log) -> list[dict]:
+    """Poll the probe until `timeout` or Ctrl-C. Returns one dict per window in which the chip answered."""
+    start = clock()
+    windows, cur, fails, attempts, last_note = [], None, 0, 0, start
+
+    def close(w):
+        w["ms"] = (w["last"] - w["first"]) * 1000
+        windows.append(w)
+        report(f"  window {len(windows)}: answered from +{w['first'] - start:.3f} s for {w['ms']:.0f} ms "
+               f"({w['reads']} reads), DPIDR 0x{w['dpidr']:08X}")
+    try:
+        while clock() - start < timeout:
+            attempts += 1
+            try:
+                v = raw_attempt(probe)
+                ok = valid_dpidr(v)
+            except Exception:
+                ok = False
+            now = clock()
+            if ok:
+                fails = 0
+                if cur is None:
+                    cur = {"first": now, "last": now, "reads": 0, "dpidr": v}
+                    report(f"  chip answered at +{now - start:.3f} s, DPIDR 0x{v:08X}")
+                cur["last"], cur["reads"] = now, cur["reads"] + 1
+            else:
+                fails += 1
+                if cur is not None and fails >= WATCH_GAP_FAILS:
+                    close(cur)
+                    cur = None
+            if cur is None and now - last_note >= 10:
+                report(f"  still no answer ({attempts} attempts, {now - start:.0f} s)")
+                last_note = now
+    except KeyboardInterrupt:
+        report("interrupted")
+    if cur is not None:
+        close(cur)
+    report(f"{attempts} attempts in {clock() - start:.1f} s, {len(windows)} window(s)"
+           + (f", longest {max(w['ms'] for w in windows):.0f} ms" if windows else ""))
+    return windows
+
+
+def open_raw_probe(args):
+    """The Pico (or the one named by --probe), opened for raw SWD access only: no target, no unlock."""
+    try:
+        from pyocd.core.helpers import ConnectHelper
+        from pyocd.core.session import Session
+        from pyocd.probe.debug_probe import DebugProbe
+    except ImportError:
+        raise Fatal("pyocd is not installed: pip install pyocd")
+    probes = ConnectHelper.get_all_connected_probes(blocking=False)
+    if args.probe:
+        probes = [p for p in probes if p.unique_id == args.probe]
+    if not probes:
+        raise Fatal("no debug probe found (pyocd list shows what is connected)")
+    probe = probes[0]
+    Session(probe, options={"frequency": args.frequency, "target_override": args.target})   # pyocd needs one
+    probe.open()
+    probe.connect(DebugProbe.Protocol.SWD)
+    probe.set_clock(args.frequency)
+    return probe
+
+
+def cmd_watch(args) -> None:
+    import logging
+    pyocd_log = logging.getLogger("pyocd")
+    old_level = pyocd_log.level
+    pyocd_log.setLevel(logging.CRITICAL)      # each failed attempt would otherwise print pyocd's error
+    probe = open_raw_probe(args)
+    log(f"watching the SWD port of probe {probe.unique_id} for up to {args.timeout:.0f} s at "
+        f"{args.frequency // 1000} kHz: wake the unit now (slide switch or charger). Ctrl-C to stop.")
+    try:
+        windows = run_watch(probe, args.timeout)
+    finally:
+        pyocd_log.setLevel(old_level)
+        try:
+            probe.disconnect()
+            probe.close()
+        except Exception:
+            pass
+    if not windows:
+        raise Fail("the chip never answered")
+    odd = {w["dpidr"] for w in windows} - {DPIDR_CORTEX_M0P}
+    if odd:
+        log("note: expected DPIDR 0x%08X for a Cortex-M0+; saw %s" % (DPIDR_CORTEX_M0P, sorted(hex(x) for x in odd)))
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--fqbn", default=DEFAULT_FQBN, help=f"arduino-cli board (default {DEFAULT_FQBN})")
@@ -251,13 +578,33 @@ def main() -> int:
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("check", help="source safety check only")
     sub.add_parser("build", help="check, compile, check binary")
+    wp = sub.add_parser("watch", help="poll the SWD port and report when/for how long the chip answers")
+    wp.add_argument("--timeout", type=float, default=60.0, metavar="SECONDS", help="stop after this long (default 60)")
+    op = sub.add_parser("options", help="read the option bytes and DBGMCU registers (read-only)")
+    op.add_argument("--poll", action="store_true", help="keep retrying until the chip answers (a sleeping unit)")
+    op.add_argument("--timeout", type=float, default=120.0, metavar="SECONDS", help="with --poll: give up after this long")
+    dp = sub.add_parser("dump", help="read the flash twice, compare, save a backup")
+    dp.add_argument("--output", "-o", help="file to write (default backups/dump_<time>_<sha>.bin; never overwritten)")
+    dp.add_argument("--size", type=lambda s: int(s, 0), default=FLASH_SIZE,
+                    help=f"bytes to read from 0x{FLASH_BASE:08x} (default {FLASH_SIZE})")
+    dp.add_argument("--passes", type=int, default=2,
+                    help="reads to take and compare (default 2). 1 is for a short SWD window: the file is named "
+                         "*_unverified.bin; confirm it with a second dump")
+    dp.add_argument("--poll", action="store_true",
+                    help="keep retrying the connection in this process (about 12 attempts/s) until the chip "
+                         "answers, then read at once. For a unit that only answers SWD briefly after waking")
+    dp.add_argument("--poll-timeout", "--timeout", type=float, default=120.0, metavar="SECONDS",
+                    help="give up after this long with --poll (default 120)")
     fp = sub.add_parser("flash", help="check, build, flash, verify reconnect")
     fp.add_argument("--canary", action="store_true", help="this unit is a canary (recoverable without opening)")
     fp.add_argument("--yes", action="store_true", help="don't prompt before flashing a sealed unit")
     fp.add_argument("--bin", help="flash an existing .bin instead of building")
+    fp.add_argument("--wait", nargs="?", type=float, const=120.0, default=0.0, metavar="SECONDS",
+                    help="before flashing, poll until the chip answers SWD (wake the unit now), then flash at once; "
+                         "give up after SECONDS (default 120 when the flag has no value)")
     args = ap.parse_args()
     try:
-        {"check": cmd_check, "build": cmd_build, "flash": cmd_flash}[args.cmd](args)
+        {"check": cmd_check, "build": cmd_build, "watch": cmd_watch, "options": cmd_options, "dump": cmd_dump, "flash": cmd_flash}[args.cmd](args)
     except Fail as e:
         log(f"error: {e}")
         return 1

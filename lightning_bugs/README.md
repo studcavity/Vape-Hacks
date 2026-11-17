@@ -70,33 +70,87 @@ Beat `n` falls at Unix time `epoch + n × period`. Every device synced against a
 
 ## Build and flash wrapper
 
-First-time setup: in a `claude_sandbox` session nothing needs running by hand. The root `claude_sandbox_deps.yaml` installs `python3-venv` and `libusb` (apt) and runs `tools/setup.sh` at every launch (no root; it installs the pinned `arduino-cli`, the py32duino core and toolchain, and the pyocd venv with the FT232R plugin, and is quick when already done). Then `export PATH="$HOME/.local/bin:$PWD/.venv/bin:$PATH"`. On your own machine the script refuses to run unless you pass `--i-know-this-modifies-my-system`; it then keeps everything under `lightning_bugs/.tools/` (git-ignored) and `.venv`, never touches `~/.local/bin`, `~/.arduino15` or your arduino-cli config, writes only pip's and pyocd's package caches outside the repo, and prints the `PATH` and `ARDUINO_DIRECTORIES_*` exports to use afterwards (Linux only; `lb_flash.py` honours `ARDUINO_DIRECTORIES_DATA`). See `assessments/toolchain.md`.
+First-time setup: in a `claude_sandbox` session nothing needs running by hand. The root `claude_sandbox_deps.yaml` installs `python3-venv` and `libusb` (apt) and runs `tools/setup.sh` at every launch (no root; it installs the pinned `arduino-cli`, the py32duino core and toolchain, and the pyocd venv, and is quick when already done). Then `export PATH="$HOME/.local/bin:$PWD/.venv/bin:$PATH"`. On your own machine the script refuses to run unless you pass `--i-know-this-modifies-my-system`; it then keeps everything under `lightning_bugs/.tools/` (git-ignored) and `.venv`, never touches `~/.local/bin`, `~/.arduino15` or your arduino-cli config, writes only pip's and pyocd's package caches outside the repo, and prints the `PATH` and `ARDUINO_DIRECTORIES_*` exports to use afterwards (Linux only; `lb_flash.py` honours `ARDUINO_DIRECTORIES_DATA`). See `assessments/toolchain.md`.
 
 `tools/lb_flash.py` implements step 3 of `assessments/swd-recovery.md`. Needs `arduino-cli` (with the py32duino core) and `pyocd`.
 
 ```sh
 python3 tools/lb_flash.py check                          # source safety scan only
 python3 tools/lb_flash.py [--fqbn <board>] build         # check + compile + binary check
+python3 tools/lb_flash.py options --poll                  # read-only: option bytes (RDP, NRST, watchdog, BOR) and DBGMCU_CR
+python3 tools/lb_flash.py watch --timeout 60              # does the chip answer SWD, when, for how long?
+python3 tools/lb_flash.py -u <probe> dump                # back up the unit's flash BEFORE flashing it
 python3 tools/lb_flash.py -u <probe> flash --canary      # flash a canary unit, verify SWD
+python3 tools/lb_flash.py flash --canary --bin build/lightning_bugs.ino.bin --wait   # prebuilt: start it, then wake the unit
 python3 tools/lb_flash.py -u <probe> flash               # sealed unit: only canary-tested builds
 ```
 
+`options` reads the 128-byte option-byte block at `0x1FFF0E80` (read protection, whether NRST is a reset pin, hardware or software watchdogs, brown-out level), the live `FLASH_OPTR` register, and `RCC_APBENR1` to see whether the debug clock (`DBGEN`) is on; only if it is, it also reads the debug block `DBGMCU` at `0x40015800` (`DBGMCU_CR` bit 1 is `DBG_STOP`, the manual's switch for keeping debug clocks alive in stop mode). It writes nothing, and it tells pyocd to skip the Puya pack's `DebugCoreStart` sequence. **That matters:** with it, every ordinary pyocd connection (`dump`, `lb_sync`) sets `DHCSR.C_DEBUGEN` and `DBGEN` and writes `DBGMCU_CR = 2` (`DBG_STOP`) and the freeze registers; the bits stay until a power-on reset (battery disconnect), so a `DBG_STOP = 1` read through an ordinary session says nothing about the original firmware. Use `--poll` (and `--timeout`) on a sleeping unit. Addresses and bit layouts are from the PY32F030 reference manual v1.3 (sections 4.4, 4.8, 8.6.15, 28.9) and the Puya pack `Puya.PY32F0xx_DFP.1.2.8.pdsc`. First reading on the canary (taken with the pack sequence still active): RDP level 0, NRST is a GPIO (no reset pin), IWDG and WWDG are software, BOR off, no write protection.
+
+`watch` is the diagnostic to run first when a connection fails: it keeps the probe open and tries a raw SWD line reset and DP IDR read about 800 times a second (a `--poll` attempt costs about 85 ms, almost all setup), and prints when the chip first answers, its DPIDR (a Cortex-M0+ gives `0x0BB11477`) and how long it kept answering, so you learn whether a connect window exists and how long it is. It reads no flash, halts nothing and exits 1 if the chip never answers.
+
+`flash --wait [SECONDS]` polls until the chip answers SWD (default 120 s) and then runs `pyocd flash` at once, so you start the command first and wake the unit second; pair it with `--bin` after a separate `build` so the compile does not use up the window. The flash itself is run once and never retried: only the poll, which reads one word, repeats. `pyocd flash` halts the core as it connects (its default connect mode), so one connection should hold for the whole flash.
+
+`dump` reads the 64 KB of flash (`0x08000000`) twice over SWD without halting or resetting the chip, and saves it to `backups/dump_<time>_<sha>.bin` (git-ignored; copy it somewhere durable) only if both reads are identical and not all `0x00`/`0xFF` (a read-protected chip can look like that, and such a dump is not a backup). It never overwrites a file. `--output` picks the file and `--size` the length. `--passes 1` takes a single read for a short SWD window (see the wiring notes): it still rejects blank flash but cannot cross-check, so the file is named `*_unverified.bin`; dump again later and compare the sha256 values before trusting it. `--poll` is for a unit that only answers SWD briefly after waking: it retries the connection inside one process (about 8-12 attempts a second, against about 1 s per attempt for a shell loop, which starts Python each time), reads the moment the chip answers, and takes all passes in that one session. It gives up after `--poll-timeout` seconds (default 120). It never halts the core. It does not stop `flash` from running without a backup. (`pyocd read`, which an old comment in `PY32F030EK28.ino` suggests, does not exist in the pinned pyocd.)
+
 It refuses to build if the sketch mentions PA13/PA14, raw GPIOA mode/AF writes, STOP/STANDBY, deep-sleep bits, flash/option-byte access, RCC clock changes or DBGMCU (waive one line with `// lb-allow-swd-risk`). After building it checks the ELF for forbidden HAL symbols and the `.bin` for flash-unlock keys. After flashing it resets the chip and confirms it can reattach over SWD in the guard, after the guard, and 30 s later. The `--canary` flag is your declaration that the unit is recoverable; builds that pass are recorded by hash in `.lb_canary.json` (git-ignored). The default `--fqbn` is `PY32Duino:PY32:GenF030:pnum=PY32F030x8`.
 
-## Debug probes (two supported stacks)
+## Debug probe
 
-Both stacks are supported for now, and every change is made for both (see "Probe parity" in the repo's `CLAUDE.md`):
+The supported probe is a Raspberry Pi Pico running debug-probe (CMSIS-DAP) firmware (USB `2e8a:000c`), used
+through pyocd's built-in driver. Nothing needs configuring: with one probe attached pyocd picks it. To be
+explicit (or with several probes), find its ID with `python3 host/lb_sync.py list` (or `pyocd list`) and pass
+`--probe <id>` / `-u <id>` to `lb_flash.py` and `lb_sync.py`. They do not know what kind of probe it is.
 
-| | A: Raspberry Pi Pico | B: FTDI FT232R |
-|---|---|---|
-| Hardware | Pico with debug-probe (CMSIS-DAP) firmware, USB `2e8a:000c` | FT232R USB-UART board, USB `0403:6001`, plus a ~470 ohm resistor |
-| Driver | pyocd built-in | `probes/ft232r` plugin (installed by `tools/setup.sh`) |
-| Select | `--probe <id>` or let pyocd pick the only probe | `--probe ft232r:` (opt-in, never auto-picked) |
-| Speed | USB CMSIS-DAP | slower: bit-bang, 1 USB round trip per batch |
-| Status | used for the original work | simulated only; not yet tried on hardware |
+### Wiring the Pico to the unit
 
-`lb_flash.py` and `lb_sync.py` do not know which one is attached. Wiring, options and the hardware
-bring-up checklist for B are in `probes/ft232r/README.md`.
+Sources: the prior-art project in `PY32F030EK28 - Geek Bar Pulse X Jam/README.md`, the schematic of the matching
+board (schlae/VapeRE `BD0061`, `BD0061.kicad_sch`: PY32F030K2, USB-C `J1`) and dwaskevich/Geek_Bar_Pulse_hijack (same
+maker, J-Link). **Not yet tried on our canary:** treat it as a starting point and check it with `pyocd list` and
+`lb_flash.py dump` before anything else.
+
+The unit's SWD pins (PA13 SWDIO, PA14 SWCLK) are brought out to the USB-C port's **A5 and B5** (the CC pins), so
+the case does not need opening. Use a USB-C breakout board and wire:
+
+```
+SWCLK: Pico GP2 -> ~240 ohm -> B5 -> PA14
+SWDIO: Pico GP3 -> ~240 ohm -> A5 -> PA13
+GND:   Pico GND -> USB-C A12 (B12 is also GND)
+(prior art also pulls both lines up to 3.3V with 10k; see below)
+```
+
+Per the VapeRE schematic, **GND is A12 and B12**, VBUS is A9/B9, and the SWD lines are on the CC pins, each with a
+5.1k resistor to ground (R1, R2). In its drawing SWDIO is on B5 and SWCLK on A5 (read from the KiCad file, so
+verify with a meter); the Jam prior art wires them the other way round. Both are right for one plug orientation,
+so if it does not connect, swap the two signal wires (or flip the connector) before suspecting anything else.
+
+- **Do not use the three pads labelled SWCLK / GND / SWDIO on the underside of the Pico.** Those are the Pico's *own*
+  debug port (for programming the Pico itself) and sit at a steady 3.3 V; the probe firmware never drives them. The
+  unit connects to the ordinary pins **GP2 (physical pin 4) and GP3 (physical pin 5)**, and GND to any GND pin (3, 8, ...).
+- GP2 = SWCLK and GP3 = SWDIO are the Pico debug-probe firmware's default pins (`debugprobe` v2.3.1,
+  `include/board_pico_config.h`). GP1 is its target-reset (nRESET) output, unused here.
+- The series resistors are there because the Pico drives 3.3 V while the unit runs at battery voltage (up to ~4.2 V,
+  ~5 V on USB).
+- Power the unit from its own battery. Do not connect the Pico's VBUS/VSYS to the unit, and do not plug a charger
+  or USB host into the breakout while the probe is wired to A5/B5 (their CC lines would drive the SWD pins).
+- **The unit sleeps, and SWD is unavailable while it does** (hijack README: normally in deep sleep or stop; the slide
+  switch wakes it and opens a "small connect window", and plugging in a charger opens another). Run the probe command
+  with `dump --poll` (or `--poll --passes 1`), then move the switch, so an attempt lands in the window. `dump` reads the flash twice by default, which needs
+  the link to stay up the whole time (`--passes 1` needs half as long); a very slow `--frequency` stretches that, so do not go lower than needed.
+  The 500 kHz default is the speed hijack's own J-Link script uses (`speed 500`).
+- The unit's 5.1k CC pull-downs (R1/R2 above, "5.1k pull-downs on CC1/CC2" in hijack) are on a stock unit, which is
+  why the Jam author removed theirs. A 10k pull-up to 3.3 V against a 5.1k pull-down only divides to about 1.1 V,
+  so the external pull-ups cannot lift an idle line to a logic high while those resistors are present.
+  Whether the link works with them in place is untested here.
+- The Pico has no target-voltage input: it always drives 3.3 V. hijack's J-Link needed its VTref set to 3300 mV by
+  hand for the same reason (unit runs from the battery, about 3.3 to 4.2 V).
+- Pull-ups: debugprobe v2.3.1 enables the RP2040's internal pull-up on SWDIO only (`gpio_pull_up(PROBE_PIN_SWDIO)`
+  in `probe.pio`); SWCLK is an actively driven output with none. That internal pull-up is weak (tens of kilohms), so
+  the prior art's external 10k pull-ups are stronger, not built in. The Jam prior art removed the unit's own
+  pull-downs on A5/B5 (it recalls 2.5k; the schematic and hijack say 5.1k) but says that is probably unnecessary.
+- Take a backup first: `python3 tools/lb_flash.py -u <probe> dump`.
+- A similar chip's author needed resistors, a slower clock and a one-off `edbg` wake-up to connect; see
+  `assessments/py32c642-prior-art.md` (untried on our unit).
 
 ## Usage
 

@@ -1,10 +1,6 @@
-# Exact versions of the probe stacks' Python libraries, used by both setup.sh (the sandbox venv) and
-# requirements-dev.txt (CI), so every environment runs what was tested. Last verified together on
+# Exact version of the probe library, used by both setup.sh (the sandbox venv) and
+# requirements-dev.txt (CI), so every environment runs what was tested. Last verified on
 # Ubuntu 24.04 (Python 3.10/3.12) and 26.04 (Python 3.12/3.14).
 #
-# Bump deliberately: change the number here, run the whole suite, and, for a pyocd bump, check the
-# FT232R plugin against the new DebugProbe API. The plugin's pyproject.toml keeps loose ranges
-# (compatibility floors); the pin lives only here. Both probe stacks share this file (CLAUDE.md,
-# "Probe parity").
-pyocd==0.46.1     # stack A (Pico/CMSIS-DAP) and the host for stack B's plugin
-pyftdi==0.57.2    # stack B (FT232R)
+# Bump deliberately: change the number here and run the whole suite.
+pyocd==0.46.1     # Raspberry Pi Pico debug probe (CMSIS-DAP)

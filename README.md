@@ -31,6 +31,6 @@ shellcheck lightning_bugs/tools/setup.sh
 
 Lint takes the file list from `git ls-files` because `setup.sh` creates `lightning_bugs/.venv`, which pyflakes would otherwise scan.
 
-CI (`.github/workflows/ci.yml`) runs everything on Ubuntu 24.04 and 26.04 runners: lint, the unit tests on Python 3.10, 3.12 and 3.14 (3.14 only on 26.04, 3.10 only on 24.04), the repo checks, the integration tests and the FT232R plugin tests, on every push.
+CI (`.github/workflows/ci.yml`) runs everything on Ubuntu 24.04 and 26.04 runners: lint, the unit tests on Python 3.10, 3.12 and 3.14 (3.14 only on 26.04, 3.10 only on 24.04), the repo checks, and the integration tests, on every push.
 
 Not covered: anything that needs a real probe or device. Flashing is still a manual step and must go through a canary unit first (see `lightning_bugs/README.md`). A few `setup.sh` tests depend on whether `/etc/claude-sandbox` exists and run only on the matching side: inside a sandbox the sandbox-mode run is exercised, elsewhere (CI, your machine) the refusal and the `--i-know-this-modifies-my-system` mode are. All of them use fake `arduino-cli`/`python3`, so nothing is downloaded or installed.

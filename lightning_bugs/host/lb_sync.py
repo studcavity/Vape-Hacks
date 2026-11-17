@@ -391,6 +391,7 @@ def open_session(args):
         "frequency": args.frequency,
         "target_override": args.target,
     }
+    options.update(getattr(args, "extra_options", None) or {})
     session = ConnectHelper.session_with_chosen_probe(
         unique_id=args.probe, blocking=False, options=options)
     if session is None:
