@@ -381,3 +381,84 @@ def test_read_flash_passes_reads_every_pass_in_one_session(monkeypatch):
 def test_cli_dump_offers_poll(tree):
     r = cli(tree, "dump", "--help")
     assert "--poll" in r.stdout and "--poll-timeout" in r.stdout
+
+
+# ─── watch ───────────────────────────────────────────────────────────────────
+class FakeProbe:
+    """Answers (with `dpidr`) only while its clock is inside one of `windows`; every read costs 1 ms."""
+    def __init__(self, windows=(), dpidr=0x0BB11477, interrupt_at=None):
+        self.t, self.windows, self.dpidr, self.interrupt_at = 0.0, windows, dpidr, interrupt_at
+
+    def swj_sequence(self, n, bits):
+        pass
+
+    def read_dp(self, addr, now=True):
+        self.t += 0.001
+        if self.interrupt_at is not None and self.t >= self.interrupt_at:
+            raise KeyboardInterrupt
+        if any(a <= self.t < b for a, b in self.windows):
+            return self.dpidr
+        raise RuntimeError("No ACK")
+
+
+def watch(probe, timeout=1.0):
+    lines = []
+    return lb_flash.run_watch(probe, timeout, clock=lambda: probe.t, report=lines.append), lines
+
+
+def test_watch_reports_no_window_when_the_chip_never_answers():
+    windows, lines = watch(FakeProbe())
+    assert windows == [] and "0 window(s)" in lines[-1]
+
+
+def test_watch_measures_one_windows_start_length_and_dpidr():
+    windows, lines = watch(FakeProbe(windows=[(0.200, 0.350)]))
+    (w,) = windows
+    assert 140 <= w["ms"] <= 150 and w["dpidr"] == 0x0BB11477
+    assert any("DPIDR 0x0BB11477" in l and "answered at +0.2" in l for l in lines)
+    assert "1 window(s), longest" in lines[-1]
+
+
+def test_watch_counts_two_windows_separately():
+    windows, _ = watch(FakeProbe(windows=[(0.1, 0.2), (0.5, 0.52)]))
+    assert len(windows) == 2 and windows[1]["ms"] < 25
+
+
+def test_watch_ignores_a_floating_line_and_junk_idcodes():
+    for junk in (0xFFFFFFFF, 0x00000000, 0x0BB11476):          # all ones; zero; bit 0 clear
+        windows, _ = watch(FakeProbe(windows=[(0.0, 5.0)], dpidr=junk))
+        assert windows == [], hex(junk)
+
+
+def test_watch_closes_the_window_it_is_in_when_interrupted_or_timed_out():
+    windows, lines = watch(FakeProbe(windows=[(0.2, 9.0)], interrupt_at=0.4))
+    assert len(windows) == 1 and "interrupted" in lines
+    windows, _ = watch(FakeProbe(windows=[(0.2, 9.0)]), timeout=0.5)
+    assert len(windows) == 1
+
+
+def test_watch_tolerates_a_short_dropout_inside_a_window():
+    windows, _ = watch(FakeProbe(windows=[(0.100, 0.200), (0.203, 0.300)]))   # a 3 ms gap
+    assert len(windows) == 1
+
+
+def test_open_raw_probe_needs_a_probe(monkeypatch):
+    from pyocd.core.helpers import ConnectHelper
+    monkeypatch.setattr(ConnectHelper, "get_all_connected_probes", staticmethod(lambda blocking=False: []))
+    args = argparse.Namespace(probe=None, frequency=500_000, target="py32f030x8")
+    with pytest.raises(lb_flash.Fatal, match="no debug probe"):
+        lb_flash.open_raw_probe(args)
+
+
+def test_open_raw_probe_honours_the_probe_id(monkeypatch):
+    from pyocd.core.helpers import ConnectHelper
+    other = type("P", (), {"unique_id": "OTHER"})()
+    monkeypatch.setattr(ConnectHelper, "get_all_connected_probes", staticmethod(lambda blocking=False: [other]))
+    args = argparse.Namespace(probe="WANTED", frequency=500_000, target="py32f030x8")
+    with pytest.raises(lb_flash.Fatal, match="no debug probe"):
+        lb_flash.open_raw_probe(args)
+
+
+def test_cli_watch_is_a_subcommand(tree):
+    r = cli(tree, "watch", "--help")
+    assert r.returncode == 0 and "--timeout" in r.stdout

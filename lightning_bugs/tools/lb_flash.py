@@ -5,6 +5,8 @@ Implements step 3 of assessments/swd-recovery.md:
 
   check   scan the sketch source for things that can cost us SWD
   build   run the check, then compile with arduino-cli (and check the binary)
+  watch   poll the chip's SWD debug port ~800 times a second and report when it answers and for how long
+          (finds out whether a connect window exists and how long it is; reads no flash, halts nothing)
   dump    read the whole flash over SWD (twice by default, compared), and save it (do this before flashing a unit)
   flash   run check + build, flash over SWD, then confirm we can still reconnect
           (in the boot guard, after the guard, and 30 s later)
@@ -344,6 +346,112 @@ def cmd_dump(args) -> Path:
     return out
 
 
+# ─── watch ───────────────────────────────────────────────────────────────────
+WATCH_GAP_FAILS = 5        # consecutive failed attempts (~6 ms) that end an "answering" window
+DPIDR_CORTEX_M0P = 0x0BB11477
+
+
+def raw_attempt(probe) -> int:
+    """One SWD line reset + JTAG-to-SWD switch + DP IDR read. Returns the DPIDR; raises when nothing ACKs."""
+    probe.swj_sequence(51, 0xFFFFFFFFFFFFFF)
+    probe.swj_sequence(16, 0xE79E)
+    probe.swj_sequence(51, 0xFFFFFFFFFFFFFF)
+    probe.swj_sequence(8, 0x00)
+    return probe.read_dp(0, now=True)
+
+
+def valid_dpidr(v: int) -> bool:
+    """A real DPIDR has bit 0 set; an all-ones read is a floating line, not a chip."""
+    return bool(v & 1) and v != 0xFFFFFFFF
+
+
+def run_watch(probe, timeout: float, clock=time.monotonic, report=log) -> list[dict]:
+    """Poll the probe until `timeout` or Ctrl-C. Returns one dict per window in which the chip answered."""
+    start = clock()
+    windows, cur, fails, attempts, last_note = [], None, 0, 0, start
+
+    def close(w):
+        w["ms"] = (w["last"] - w["first"]) * 1000
+        windows.append(w)
+        report(f"  window {len(windows)}: answered from +{w['first'] - start:.3f} s for {w['ms']:.0f} ms "
+               f"({w['reads']} reads), DPIDR 0x{w['dpidr']:08X}")
+    try:
+        while clock() - start < timeout:
+            attempts += 1
+            try:
+                v = raw_attempt(probe)
+                ok = valid_dpidr(v)
+            except Exception:
+                ok = False
+            now = clock()
+            if ok:
+                fails = 0
+                if cur is None:
+                    cur = {"first": now, "last": now, "reads": 0, "dpidr": v}
+                    report(f"  chip answered at +{now - start:.3f} s, DPIDR 0x{v:08X}")
+                cur["last"], cur["reads"] = now, cur["reads"] + 1
+            else:
+                fails += 1
+                if cur is not None and fails >= WATCH_GAP_FAILS:
+                    close(cur)
+                    cur = None
+            if cur is None and now - last_note >= 10:
+                report(f"  still no answer ({attempts} attempts, {now - start:.0f} s)")
+                last_note = now
+    except KeyboardInterrupt:
+        report("interrupted")
+    if cur is not None:
+        close(cur)
+    report(f"{attempts} attempts in {clock() - start:.1f} s, {len(windows)} window(s)"
+           + (f", longest {max(w['ms'] for w in windows):.0f} ms" if windows else ""))
+    return windows
+
+
+def open_raw_probe(args):
+    """The Pico (or the one named by --probe), opened for raw SWD access only: no target, no unlock."""
+    try:
+        from pyocd.core.helpers import ConnectHelper
+        from pyocd.core.session import Session
+        from pyocd.probe.debug_probe import DebugProbe
+    except ImportError:
+        raise Fatal("pyocd is not installed: pip install pyocd")
+    probes = ConnectHelper.get_all_connected_probes(blocking=False)
+    if args.probe:
+        probes = [p for p in probes if p.unique_id == args.probe]
+    if not probes:
+        raise Fatal("no debug probe found (pyocd list shows what is connected)")
+    probe = probes[0]
+    Session(probe, options={"frequency": args.frequency, "target_override": args.target})   # pyocd needs one
+    probe.open()
+    probe.connect(DebugProbe.Protocol.SWD)
+    probe.set_clock(args.frequency)
+    return probe
+
+
+def cmd_watch(args) -> None:
+    import logging
+    pyocd_log = logging.getLogger("pyocd")
+    old_level = pyocd_log.level
+    pyocd_log.setLevel(logging.CRITICAL)      # each failed attempt would otherwise print pyocd's error
+    probe = open_raw_probe(args)
+    log(f"watching the SWD port of probe {probe.unique_id} for up to {args.timeout:.0f} s at "
+        f"{args.frequency // 1000} kHz: wake the unit now (slide switch or charger). Ctrl-C to stop.")
+    try:
+        windows = run_watch(probe, args.timeout)
+    finally:
+        pyocd_log.setLevel(old_level)
+        try:
+            probe.disconnect()
+            probe.close()
+        except Exception:
+            pass
+    if not windows:
+        raise Fail("the chip never answered")
+    odd = {w["dpidr"] for w in windows} - {DPIDR_CORTEX_M0P}
+    if odd:
+        log("note: expected DPIDR 0x%08X for a Cortex-M0+; saw %s" % (DPIDR_CORTEX_M0P, sorted(hex(x) for x in odd)))
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--fqbn", default=DEFAULT_FQBN, help=f"arduino-cli board (default {DEFAULT_FQBN})")
@@ -353,6 +461,8 @@ def main() -> int:
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("check", help="source safety check only")
     sub.add_parser("build", help="check, compile, check binary")
+    wp = sub.add_parser("watch", help="poll the SWD port and report when/for how long the chip answers")
+    wp.add_argument("--timeout", type=float, default=60.0, metavar="SECONDS", help="stop after this long (default 60)")
     dp = sub.add_parser("dump", help="read the flash twice, compare, save a backup")
     dp.add_argument("--output", "-o", help="file to write (default backups/dump_<time>_<sha>.bin; never overwritten)")
     dp.add_argument("--size", type=lambda s: int(s, 0), default=FLASH_SIZE,
@@ -371,7 +481,7 @@ def main() -> int:
     fp.add_argument("--bin", help="flash an existing .bin instead of building")
     args = ap.parse_args()
     try:
-        {"check": cmd_check, "build": cmd_build, "dump": cmd_dump, "flash": cmd_flash}[args.cmd](args)
+        {"check": cmd_check, "build": cmd_build, "watch": cmd_watch, "dump": cmd_dump, "flash": cmd_flash}[args.cmd](args)
     except Fail as e:
         log(f"error: {e}")
         return 1

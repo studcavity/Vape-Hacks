@@ -77,10 +77,13 @@ First-time setup: in a `claude_sandbox` session nothing needs running by hand. T
 ```sh
 python3 tools/lb_flash.py check                          # source safety scan only
 python3 tools/lb_flash.py [--fqbn <board>] build         # check + compile + binary check
+python3 tools/lb_flash.py watch --timeout 60              # does the chip answer SWD, when, for how long?
 python3 tools/lb_flash.py -u <probe> dump                # back up the unit's flash BEFORE flashing it
 python3 tools/lb_flash.py -u <probe> flash --canary      # flash a canary unit, verify SWD
 python3 tools/lb_flash.py -u <probe> flash               # sealed unit: only canary-tested builds
 ```
+
+`watch` is the diagnostic to run first when a connection fails: it keeps the probe open and tries a raw SWD line reset and DP IDR read about 800 times a second (a `--poll` attempt costs about 85 ms, almost all setup), and prints when the chip first answers, its DPIDR (a Cortex-M0+ gives `0x0BB11477`) and how long it kept answering, so you learn whether a connect window exists and how long it is. It reads no flash, halts nothing and exits 1 if the chip never answers.
 
 `dump` reads the 64 KB of flash (`0x08000000`) twice over SWD without halting or resetting the chip, and saves it to `backups/dump_<time>_<sha>.bin` (git-ignored; copy it somewhere durable) only if both reads are identical and not all `0x00`/`0xFF` (a read-protected chip can look like that, and such a dump is not a backup). It never overwrites a file. `--output` picks the file and `--size` the length. `--passes 1` takes a single read for a short SWD window (see the wiring notes): it still rejects blank flash but cannot cross-check, so the file is named `*_unverified.bin`; dump again later and compare the sha256 values before trusting it. `--poll` is for a unit that only answers SWD briefly after waking: it retries the connection inside one process (about 8-12 attempts a second, against about 1 s per attempt for a shell loop, which starts Python each time), reads the moment the chip answers, and takes all passes in that one session. It gives up after `--poll-timeout` seconds (default 120). It never halts the core. It does not stop `flash` from running without a backup. (`pyocd read`, which an old comment in `PY32F030EK28.ino` suggests, does not exist in the pinned pyocd.)
 
