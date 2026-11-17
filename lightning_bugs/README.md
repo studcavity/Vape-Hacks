@@ -77,11 +77,14 @@ First-time setup: in a `claude_sandbox` session nothing needs running by hand. T
 ```sh
 python3 tools/lb_flash.py check                          # source safety scan only
 python3 tools/lb_flash.py [--fqbn <board>] build         # check + compile + binary check
+python3 tools/lb_flash.py options --poll                  # read-only: option bytes (RDP, NRST, watchdog, BOR) and DBGMCU_CR
 python3 tools/lb_flash.py watch --timeout 60              # does the chip answer SWD, when, for how long?
 python3 tools/lb_flash.py -u <probe> dump                # back up the unit's flash BEFORE flashing it
 python3 tools/lb_flash.py -u <probe> flash --canary      # flash a canary unit, verify SWD
 python3 tools/lb_flash.py -u <probe> flash               # sealed unit: only canary-tested builds
 ```
+
+`options` reads, and never writes, the 128-byte option-byte block at `0x1FFF0E80` (read protection, whether NRST is a reset pin, hardware or software watchdogs, brown-out level), the live `FLASH_OPTR` register, and the debug block `DBGMCU` at `0x40015800`. The one to look at is `DBGMCU_CR` bit 1, `DBG_STOP`: while it is clear, the chip's debug clocks stop in stop mode, which is the likely reason SWD only answers briefly after a wake. It is cleared only by a power-on reset. Use `--poll` (and `--timeout`) on a sleeping unit. Addresses and bit layouts are from the PY32F030 reference manual v1.3 (sections 4.4, 4.8, 28.9); nothing here has run against a real chip yet.
 
 `watch` is the diagnostic to run first when a connection fails: it keeps the probe open and tries a raw SWD line reset and DP IDR read about 800 times a second (a `--poll` attempt costs about 85 ms, almost all setup), and prints when the chip first answers, its DPIDR (a Cortex-M0+ gives `0x0BB11477`) and how long it kept answering, so you learn whether a connect window exists and how long it is. It reads no flash, halts nothing and exits 1 if the chip never answers.
 

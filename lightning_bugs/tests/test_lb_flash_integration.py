@@ -468,3 +468,105 @@ def test_dump_accepts_timeout_as_an_alias_of_poll_timeout(tree):
     """`watch` calls it --timeout; dump used to accept only --poll-timeout and rejected --timeout."""
     r = cli(tree, "dump", "--poll", "--timeout", "1", "--help")
     assert r.returncode == 0 and "--timeout" in r.stdout
+
+
+# ─── options (read-only) ─────────────────────────────────────────────────────
+def word(lo16):
+    """An option word as stored: setting in the low half, its one's complement in the high half."""
+    return ((~lo16 & 0xFFFF) << 16) | lo16
+
+
+def optr(rdp=0xAA, bor_en=0, bor_lev=0, iwdg_sw=1, wwdg_sw=1, nrst_gpio=0, nboot1=1):
+    return rdp | bor_en << 8 | bor_lev << 9 | iwdg_sw << 12 | wwdg_sw << 13 | nrst_gpio << 14 | nboot1 << 15
+
+
+class FakeOptionsTarget:
+    def __init__(self, user=None, wrp=0xFFFF, dbg_cr=0, fz1=0, live=None, bad_user=False):
+        user = optr() if user is None else user
+        self.mem = {lb_flash.OPTION_BASE: (word(user) ^ 1) if bad_user else word(user),
+                    lb_flash.OPTION_BASE + 4: 0x1F1F0000 | 0, lb_flash.OPTION_BASE + 8: 0,
+                    lb_flash.OPTION_BASE + 12: word(wrp),
+                    lb_flash.FLASH_OPTR: user if live is None else live, lb_flash.FLASH_SDKR: 0, lb_flash.FLASH_WRPR: wrp,
+                    lb_flash.DBG_IDCODE: 0, lb_flash.DBG_CR: dbg_cr, lb_flash.DBG_FZ1: fz1, lb_flash.DBG_FZ2: 0}
+        self.reads = []
+
+    def read32(self, addr):
+        self.reads.append(addr)
+        return self.mem[addr]
+
+    def write32(self, *a):          # the command is read-only: any write is a bug
+        raise AssertionError("options must not write")
+
+
+def text(target):
+    return "\n".join(lb_flash.format_options(lb_flash.read_options(target)))
+
+
+def test_options_decodes_a_stock_unit():
+    out = text(FakeOptionsTarget(user=optr(nrst_gpio=1, iwdg_sw=0, bor_en=1, bor_lev=6), dbg_cr=0))
+    assert "RDP 0xAA: level 0, no read protection" in out
+    assert "NRST: GPIO (no reset pin)" in out
+    assert "IWDG: HARDWARE" in out and "WWDG: software" in out
+    assert "BOR: on, rising/falling threshold 3.0/2.9 V" in out
+    assert "DBG_STOP (CR bit 1) = 0: clear" in out
+    assert "none (all 16 sectors unprotected)" in out
+
+
+def test_options_shows_dbg_stop_set_and_the_freeze_bits():
+    out = text(FakeOptionsTarget(dbg_cr=0b10, fz1=1 << 12))
+    assert "DBG_STOP (CR bit 1) = 1: SET" in out
+    assert "DBG_IWDG_STOP (FZ1 bit 12) = 1, DBG_WWDG_STOP (bit 11) = 0" in out
+
+
+def test_options_flags_read_protection_and_a_bad_complement():
+    assert "LEVEL 1" in text(FakeOptionsTarget(user=optr(rdp=0x00)))
+    out = text(FakeOptionsTarget(bad_user=True))
+    assert "COMPLEMENT MISMATCH" in out and "read protection ON" in out
+
+
+def test_options_flags_a_pending_option_change():
+    assert "DIFFERS from the option bytes" in text(FakeOptionsTarget(live=optr(nrst_gpio=1)))
+    assert "matches the option bytes" in text(FakeOptionsTarget())
+
+
+def test_options_reads_only_the_expected_addresses_and_never_writes():
+    target = FakeOptionsTarget()
+    lb_flash.read_options(target)
+    assert sorted(target.reads) == sorted(target.mem)
+
+
+def test_options_register_addresses_match_the_reference_manual():
+    assert (lb_flash.OPTION_BASE, lb_flash.FLASH_OPTR, lb_flash.DBG_CR) == (0x1FFF0E80, 0x40022020, 0x40015804)
+
+
+def test_cmd_options_polls_and_prints(monkeypatch, capsys):
+    import lb_sync
+    target = FakeOptionsTarget(dbg_cr=2)
+    tries = []
+
+    class Session:
+        board = type("B", (), {"target": target})()
+        def __enter__(self):
+            tries.append(1)
+            if len(tries) < 3:
+                raise RuntimeError("No ACK")
+            return self
+        def __exit__(self, *a): return False
+    monkeypatch.setattr(lb_sync, "open_session", lambda ns: Session())
+    monkeypatch.setattr(lb_flash.time, "sleep", lambda s: None)
+    args = argparse.Namespace(probe=None, frequency=1, target="t", poll=True, timeout=5.0)
+    lb_flash.cmd_options(args)
+    out = capsys.readouterr().out
+    assert "connected on attempt 3" in out and "DBG_STOP (CR bit 1) = 1: SET" in out
+
+
+def test_cmd_options_without_poll_fails_fast(monkeypatch):
+    import lb_sync
+    monkeypatch.setattr(lb_sync, "open_session", lambda ns: (_ for _ in ()).throw(RuntimeError("No ACK")))
+    with pytest.raises(lb_flash.Fail, match="could not read the option bytes"):
+        lb_flash.cmd_options(argparse.Namespace(probe=None, frequency=1, target="t", poll=False, timeout=1.0))
+
+
+def test_cli_options_is_a_subcommand(tree):
+    r = cli(tree, "options", "--help")
+    assert r.returncode == 0 and "--poll" in r.stdout
