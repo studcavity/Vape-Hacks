@@ -93,6 +93,36 @@ through pyocd's built-in driver. Nothing needs configuring: with one probe attac
 explicit (or with several probes), find its ID with `python3 host/lb_sync.py list` (or `pyocd list`) and pass
 `--probe <id>` / `-u <id>` to `lb_flash.py` and `lb_sync.py`. They do not know what kind of probe it is.
 
+### Wiring the Pico to the unit
+
+Source: the prior-art project in `PY32F030EK28 - Geek Bar Pulse X Jam/README.md`, which programmed this same
+kind of unit. **Not yet tried on our canary:** treat it as a starting point and check it with `pyocd list` and
+`lb_flash.py dump` before anything else.
+
+The unit's SWD pins (PA13 SWDIO, PA14 SWCLK) are brought out to the USB-C port's **A5 and B5** (the CC pins), so
+the case does not need opening. Use a USB-C breakout board and wire:
+
+```
+SWCLK: Pico GP2 -> ~240 ohm -> B5 -> PA14
+SWDIO: Pico GP3 -> ~240 ohm -> A5 -> PA13
+GND:   Pico GND -> a GND pin of the breakout
+(prior art also pulls both lines up to 3.3V with 10k; see below)
+```
+
+- GP2 = SWCLK and GP3 = SWDIO are the Pico debug-probe firmware's default pins (`debugprobe` v2.3.1,
+  `include/board_pico_config.h`). GP1 is its target-reset (nRESET) output, unused here.
+- The series resistors are there because the Pico drives 3.3 V while the unit runs at battery voltage (up to ~4.2 V,
+  ~5 V on USB).
+- Power the unit from its own battery. Do not connect the Pico's VBUS/VSYS to the unit, and do not plug a charger
+  or USB host into the breakout while the probe is wired to A5/B5 (their CC lines would drive the SWD pins).
+- If it does not connect, flip the USB-C connector over: A5/B5 are swapped.
+- Pull-ups: debugprobe v2.3.1 enables the RP2040's internal pull-up on SWDIO only (`gpio_pull_up(PROBE_PIN_SWDIO)`
+  in `probe.pio`); SWCLK is an actively driven output with none. That internal pull-up is weak (tens of kilohms), so
+  the prior art's external 10k pull-ups are stronger, not built in. The prior art removed the unit's own 2.5k
+  pull-downs on A5/B5 but says that is probably unnecessary; if you leave them, the stronger external pull-ups
+  (or lower `--frequency`) are what to try first.
+- Take a backup first: `python3 tools/lb_flash.py -u <probe> dump`.
+
 ## Usage
 
 ```sh

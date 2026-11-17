@@ -32,3 +32,9 @@ def test_pyocd_is_the_only_pin_and_is_exact(repo):
     assert set(pins) == {"pyocd"}
     assert "-c lightning_bugs/constraints.txt" in read(repo, "requirements-dev.txt")
     assert 'PIP_CONSTRAINT="$ROOT/constraints.txt"' in read(repo, "lightning_bugs/tools/setup.sh")
+
+
+def test_readme_documents_the_pico_wiring(repo):
+    text = read(repo, "lightning_bugs/README.md")
+    for needle in ("GP2", "GP3", "A5", "B5", "SWCLK", "SWDIO", "dump"):
+        assert needle in text, f"lightning_bugs/README.md no longer mentions {needle!r} in the Pico wiring"
