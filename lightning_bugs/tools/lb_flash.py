@@ -5,7 +5,7 @@ Implements step 3 of assessments/swd-recovery.md:
 
   check   scan the sketch source for things that can cost us SWD
   build   run the check, then compile with arduino-cli (and check the binary)
-  dump    read the whole flash twice over SWD, compare, and save it (do this before flashing a unit)
+  dump    read the whole flash over SWD (twice by default, compared), and save it (do this before flashing a unit)
   flash   run check + build, flash over SWD, then confirm we can still reconnect
           (in the boot guard, after the guard, and 30 s later)
 
@@ -266,10 +266,14 @@ def read_flash(args, size: int) -> bytes:
 
 
 def cmd_dump(args) -> Path:
-    size = args.size
-    first, second = read_flash(args, size), read_flash(args, size)
-    if first != second:
-        raise Fail("two reads of the flash differ: unstable SWD link (check wiring, lower --frequency); nothing saved")
+    size, passes = args.size, args.passes
+    if passes < 1:
+        raise Fail("--passes must be at least 1")
+    first = read_flash(args, size)
+    for _ in range(passes - 1):
+        if read_flash(args, size) != first:
+            raise Fail("two reads of the flash differ: unstable SWD link (check wiring, lower --frequency); "
+                       "nothing saved")
     if len(set(first)) == 1:
         raise Fail(f"flash reads as all 0x{first[0]:02X}: the chip is blank, read-protected or the read failed; "
                    "nothing saved. This is NOT a usable backup")
@@ -278,11 +282,15 @@ def cmd_dump(args) -> Path:
         out = Path(args.output)
     else:
         DUMP_DIR.mkdir(exist_ok=True)
-        out = DUMP_DIR / f"dump_{time.strftime('%Y%m%dT%H%M%S')}_{digest[:12]}.bin"
+        out = DUMP_DIR / f"dump_{time.strftime('%Y%m%dT%H%M%S')}_{digest[:12]}{'' if passes > 1 else '_unverified'}.bin"
     if out.exists():
         raise Fail(f"{out} already exists; refusing to overwrite a backup")
     out.write_bytes(first)
-    log(f"dumped {size} bytes from 0x{FLASH_BASE:08x}, two identical reads, sha256 {digest}")
+    if passes > 1:
+        log(f"dumped {size} bytes from 0x{FLASH_BASE:08x}, {passes} identical reads, sha256 {digest}")
+    else:
+        log(f"dumped {size} bytes from 0x{FLASH_BASE:08x}, ONE read only (not cross-checked), sha256 {digest}")
+        log("Dump again later and compare the sha256 values before trusting this as a backup.")
     log(f"saved {out}")
     log("Copy it somewhere durable before this machine goes away (a sandbox's files are lost when it exits).")
     return out
@@ -301,6 +309,9 @@ def main() -> int:
     dp.add_argument("--output", "-o", help="file to write (default backups/dump_<time>_<sha>.bin; never overwritten)")
     dp.add_argument("--size", type=lambda s: int(s, 0), default=FLASH_SIZE,
                     help=f"bytes to read from 0x{FLASH_BASE:08x} (default {FLASH_SIZE})")
+    dp.add_argument("--passes", type=int, default=2,
+                    help="reads to take and compare (default 2). 1 is for a short SWD window: the file is named "
+                         "*_unverified.bin; confirm it with a second dump")
     fp = sub.add_parser("flash", help="check, build, flash, verify reconnect")
     fp.add_argument("--canary", action="store_true", help="this unit is a canary (recoverable without opening)")
     fp.add_argument("--yes", action="store_true", help="don't prompt before flashing a sealed unit")

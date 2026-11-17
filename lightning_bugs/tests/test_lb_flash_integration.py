@@ -194,8 +194,9 @@ def dumper(tmp_path, monkeypatch):
     reads_data = []
     monkeypatch.setattr(lb_flash, "read_flash", fake_read)
 
-    def run(output=None, size=1024):
-        args = argparse.Namespace(probe=None, frequency=500_000, target="py32f030x8", output=output, size=size)
+    def run(output=None, size=1024, passes=2):
+        args = argparse.Namespace(probe=None, frequency=500_000, target="py32f030x8", output=output, size=size,
+                                  passes=passes)
         return lb_flash.cmd_dump(args)
     run.image, run.reads, run.queue, run.dir = image, reads, reads_data, tmp_path / "backups"
     return run
@@ -264,3 +265,29 @@ def test_read_flash_reports_swd_failure_as_fail(monkeypatch):
 def test_cli_dump_is_a_subcommand(tree):
     r = cli(tree, "dump", "--help")
     assert r.returncode == 0 and "--output" in r.stdout and "--size" in r.stdout
+
+
+def test_dump_single_pass_reads_once_and_marks_the_file_unverified(dumper):
+    out = dumper(passes=1)
+    assert dumper.reads == [1024]
+    assert out.read_bytes() == dumper.image and out.stem.endswith("_unverified")
+
+
+def test_dump_single_pass_still_refuses_blank_flash(dumper):
+    dumper.queue += [b"\xff" * 1024]
+    with pytest.raises(lb_flash.Fail, match="NOT a usable backup"):
+        dumper(passes=1)
+
+
+def test_dump_three_passes_compares_all(dumper):
+    good = bytes(range(256)) * 4
+    dumper.queue += [good, good, good[:-1] + b"\x00"]
+    with pytest.raises(lb_flash.Fail, match="differ"):
+        dumper(passes=3)
+    assert dumper.reads == [1024] * 3
+
+
+def test_dump_rejects_zero_passes(dumper):
+    with pytest.raises(lb_flash.Fail, match="at least 1"):
+        dumper(passes=0)
+    assert dumper.reads == []
