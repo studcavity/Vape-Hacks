@@ -118,6 +118,9 @@ Per the VapeRE schematic, **GND is A12 and B12**, VBUS is A9/B9, and the SWD lin
 verify with a meter); the Jam prior art wires them the other way round. Both are right for one plug orientation,
 so if it does not connect, swap the two signal wires (or flip the connector) before suspecting anything else.
 
+- **Do not use the three pads labelled SWCLK / GND / SWDIO on the underside of the Pico.** Those are the Pico's *own*
+  debug port (for programming the Pico itself) and sit at a steady 3.3 V; the probe firmware never drives them. The
+  unit connects to the ordinary pins **GP2 (physical pin 4) and GP3 (physical pin 5)**, and GND to any GND pin (3, 8, ...).
 - GP2 = SWCLK and GP3 = SWDIO are the Pico debug-probe firmware's default pins (`debugprobe` v2.3.1,
   `include/board_pico_config.h`). GP1 is its target-reset (nRESET) output, unused here.
 - The series resistors are there because the Pico drives 3.3 V while the unit runs at battery voltage (up to ~4.2 V,
