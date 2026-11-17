@@ -481,12 +481,13 @@ def optr(rdp=0xAA, bor_en=0, bor_lev=0, iwdg_sw=1, wwdg_sw=1, nrst_gpio=0, nboot
 
 
 class FakeOptionsTarget:
-    def __init__(self, user=None, wrp=0xFFFF, dbg_cr=0, fz1=0, live=None, bad_user=False):
+    def __init__(self, user=None, wrp=0xFFFF, dbg_cr=0, fz1=0, live=None, bad_user=False, dbgen=1):
         user = optr() if user is None else user
         self.mem = {lb_flash.OPTION_BASE: (word(user) ^ 1) if bad_user else word(user),
                     lb_flash.OPTION_BASE + 4: 0x1F1F0000 | 0, lb_flash.OPTION_BASE + 8: 0,
                     lb_flash.OPTION_BASE + 12: word(wrp),
                     lb_flash.FLASH_OPTR: user if live is None else live, lb_flash.FLASH_SDKR: 0, lb_flash.FLASH_WRPR: wrp,
+                    lb_flash.RCC_APBENR1: dbgen << lb_flash.DBGEN_BIT,
                     lb_flash.DBG_IDCODE: 0, lb_flash.DBG_CR: dbg_cr, lb_flash.DBG_FZ1: fz1, lb_flash.DBG_FZ2: 0}
         self.reads = []
 
@@ -533,6 +534,44 @@ def test_options_reads_only_the_expected_addresses_and_never_writes():
     target = FakeOptionsTarget()
     lb_flash.read_options(target)
     assert sorted(target.reads) == sorted(target.mem)
+
+
+def test_options_does_not_read_dbgmcu_when_the_debug_clock_is_off():
+    target = FakeOptionsTarget(dbgen=0, dbg_cr=2)
+    out = text(target)
+    assert "DBGEN (bit 27) = 0" in out and "DBGMCU was NOT read" in out
+    assert "DBG_STOP (CR bit 1)" not in out
+    assert not {lb_flash.DBG_IDCODE, lb_flash.DBG_CR, lb_flash.DBG_FZ1, lb_flash.DBG_FZ2} & set(target.reads)
+
+
+def test_options_asks_pyocd_not_to_run_the_pack_debug_start_sequence(monkeypatch):
+    import lb_sync
+    seen = []
+
+    class Session:
+        board = type("B", (), {"target": FakeOptionsTarget()})()
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+    monkeypatch.setattr(lb_sync, "open_session", lambda ns: seen.append(ns.extra_options) or Session())
+    lb_flash.cmd_options(argparse.Namespace(probe=None, frequency=1, target="t", poll=False, timeout=1.0))
+    assert seen == [{"pack.debug_sequences.disabled_sequences": "DebugCoreStart"}]
+
+
+def test_dump_still_uses_the_pack_sequence(monkeypatch):
+    """Only `options` opts out: dump keeps pyocd's normal connect behaviour."""
+    import lb_sync
+    seen = []
+
+    class Target:
+        def read_memory_block8(self, a, n): return [1] * n
+
+    class Session:
+        board = type("B", (), {"target": Target()})()
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+    monkeypatch.setattr(lb_sync, "open_session", lambda ns: seen.append(ns.extra_options) or Session())
+    lb_flash.read_flash(argparse.Namespace(probe=None, frequency=1, target="t"), 16)
+    assert seen == [None]
 
 
 def test_options_register_addresses_match_the_reference_manual():

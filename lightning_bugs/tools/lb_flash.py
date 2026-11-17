@@ -255,11 +255,14 @@ def cmd_flash(args) -> None:
 
 
 # ─── dump ────────────────────────────────────────────────────────────────────
-def with_target(args, fn, what: str = "flash"):
+def with_target(args, fn, what: str = "flash", extra_options: dict | None = None):
     """Open an attach-only session (no halt, no reset, no unlock), run fn(target), close it. Failures that
-    retrying cannot fix (no probe, pyocd missing) are raised as Fatal."""
+    retrying cannot fix (no probe, pyocd missing) are raised as Fatal. Note that pyocd's Puya pack still runs its
+    DebugCoreStart sequence on connect: it sets DHCSR.C_DEBUGEN, RCC_APBENR1.DBGEN and writes DBGMCU_CR (DBG_STOP) and
+    the freeze registers. Pass extra_options to change that (see cmd_options)."""
     import lb_sync
-    ns = argparse.Namespace(probe=args.probe, frequency=args.frequency, target=args.target)
+    ns = argparse.Namespace(probe=args.probe, frequency=args.frequency, target=args.target,
+                            extra_options=extra_options)
     try:
         with lb_sync.open_session(ns) as session:
             return fn(session.board.target)
@@ -332,6 +335,8 @@ OPTION_BASE = 0x1FFF0E80
 OPTION_WORDS = {"user": 0x00, "sdk": 0x04, "word2": 0x08, "wrp": 0x0C}
 FLASH_REGS = 0x4002_2000
 FLASH_OPTR, FLASH_SDKR, FLASH_WRPR = FLASH_REGS + 0x20, FLASH_REGS + 0x24, FLASH_REGS + 0x2C
+RCC_APBENR1 = 0x4002_103C           # bit 27 = DBGEN, the debug module clock enable (reset value 0)
+DBGEN_BIT = 27
 DBG_BASE = 0x4001_5800
 DBG_IDCODE, DBG_CR, DBG_FZ1, DBG_FZ2 = DBG_BASE, DBG_BASE + 4, DBG_BASE + 8, DBG_BASE + 12
 
@@ -340,8 +345,10 @@ def read_options(target) -> dict[str, int]:
     """Every register the `options` command shows, as raw 32-bit words. Reads only; nothing is written."""
     raw = {name: target.read32(OPTION_BASE + off) for name, off in OPTION_WORDS.items()}
     raw.update(live_optr=target.read32(FLASH_OPTR), live_sdkr=target.read32(FLASH_SDKR),
-               live_wrpr=target.read32(FLASH_WRPR), dbg_idcode=target.read32(DBG_IDCODE),
-               dbg_cr=target.read32(DBG_CR), dbg_fz1=target.read32(DBG_FZ1), dbg_fz2=target.read32(DBG_FZ2))
+               live_wrpr=target.read32(FLASH_WRPR), rcc_apbenr1=target.read32(RCC_APBENR1))
+    if raw["rcc_apbenr1"] >> DBGEN_BIT & 1:      # the DBG block is only meaningful with its clock on
+        raw.update(dbg_idcode=target.read32(DBG_IDCODE), dbg_cr=target.read32(DBG_CR),
+                   dbg_fz1=target.read32(DBG_FZ1), dbg_fz2=target.read32(DBG_FZ2))
     return raw
 
 
@@ -388,6 +395,14 @@ def format_options(raw: dict[str, int]) -> list[str]:
     live = {"optr": raw["live_optr"] & 0xFFFF, "from option bytes": u & 0xFFFF}
     out.append(f"live FLASH_OPTR 0x{raw['live_optr']:08X}" + ("  (matches the option bytes)" if live["optr"] == live["from option bytes"]
                                                              else "  (DIFFERS from the option bytes: a write is pending a reload)"))
+    en = raw["rcc_apbenr1"]
+    out.append(f"RCC_APBENR1 0x{en:08X}: DBGEN (bit 27) = {en >> DBGEN_BIT & 1}")
+    if "dbg_cr" not in raw:
+        out += ["  the debug clock is off, so DBGMCU was NOT read: it is not meaningful without it, and this command "
+                "writes nothing (it will not switch the clock on).",
+                "  (pyocd's Puya pack normally sets DBGEN and writes DBGMCU_CR = 2 itself on connect, which is why "
+                "an ordinary session always reads DBG_STOP = 1.)"]
+        return out
     cr, fz1 = raw["dbg_cr"], raw["dbg_fz1"]
     out += [f"DBGMCU at 0x{DBG_BASE:08X}: IDCODE 0x{raw['dbg_idcode']:08X}, CR 0x{cr:08X}, APB_FZ1 0x{fz1:08X}, "
             f"APB_FZ2 0x{raw['dbg_fz2']:08X}",
@@ -400,7 +415,10 @@ def format_options(raw: dict[str, int]) -> list[str]:
 
 
 def cmd_options(args) -> None:
-    attempt = lambda: with_target(args, read_options, "the option bytes")      # noqa: E731
+    # pyocd's Puya pack would otherwise run DebugCoreStart on connect, which writes DHCSR.C_DEBUGEN, DBGEN and
+    # DBGMCU_CR = DBG_STOP: that would set the very bits this command is meant to report.
+    quiet = {"pack.debug_sequences.disabled_sequences": "DebugCoreStart"}
+    attempt = lambda: with_target(args, read_options, "the option bytes", quiet)      # noqa: E731
     raw = poll_until(attempt, args.timeout) if args.poll else attempt()
     for line in format_options(raw):
         log(line)
