@@ -1,5 +1,6 @@
 """tools/lb_stack.py: call-graph analysis (synthetic graphs, no toolchain) and, when arduino-cli and
 the py32duino core are installed, the real firmware's worst-case stack against every model's budget."""
+import os
 import shutil
 import subprocess
 
@@ -142,6 +143,8 @@ def stack_cache(tmp_path_factory):
 @pytest.mark.parametrize("model", lb_catalog.MODELS, ids=lambda m: m.name)
 def test_real_firmware_fits_every_models_stack_budget(model, tmp_path, stack_cache):
     why = _toolchain()
+    if why and os.environ.get("LB_REQUIRE_TOOLCHAIN"):
+        pytest.fail(f"LB_REQUIRE_TOOLCHAIN is set (CI) but the toolchain is missing: {why}")
     if why:
         pytest.skip(why)
     report_, problems = lb_stack.check_model(model, tmp_path, cache=stack_cache)

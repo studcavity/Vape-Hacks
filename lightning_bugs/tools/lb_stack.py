@@ -120,8 +120,13 @@ def find_tool(name: str) -> str | None:
     p = shutil.which(name)
     if p:
         return p
-    hits = sorted(glob.glob(os.path.expanduser(f"~/.arduino15/packages/*/tools/*/*/bin/{name}")))
-    return hits[-1] if hits else None
+    # Wherever arduino-cli keeps its data: the env override, the default, and setup.sh's in-repo copy.
+    bases = [os.environ.get("ARDUINO_DIRECTORIES_DATA"), "~/.arduino15", str(ROOT / ".tools" / "arduino15")]
+    for base in filter(None, bases):
+        hits = sorted(glob.glob(os.path.join(os.path.expanduser(base), f"packages/*/tools/*/*/bin/{name}")))
+        if hits:
+            return hits[-1]
+    return None
 
 
 def elf_functions(elf: Path) -> dict:
