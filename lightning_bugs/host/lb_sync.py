@@ -9,6 +9,9 @@ clock-rate correction and a shared beat grid.
 
 Commands
   list                     show connected debug probes
+  info                     firmware version, build and wire format of the connected
+                           unit; works even if the unit's format is not one this
+                           script speaks
   sync                     measure clock rate (default 10 min) and write the sync
   sync --refine            re-sync using the time since the last sync as a long
                            baseline for the rate (best accuracy; see README)
@@ -40,14 +43,21 @@ from dataclasses import dataclass
 from pathlib import Path
 
 # ─── Block layout (must match LbSyncBlock in lb_sync.h) ──────────────────────
+# The first HEADER_WORDS words never move or change meaning, so any host can find a block
+# and report what it is. Format compatibility: a different MAJOR is a different layout; a
+# MINOR only appends words at the end, so a unit with the same major and a minor at least
+# as high as ours has every field we use.
 MAGIC0 = 0x4C425359                      # 'LBSY'
 MAGIC1 = MAGIC0 ^ 0xFFFFFFFF
-VERSION = 3
+FORMAT_MAJOR = 4
+FORMAT_MINOR = 0
+HEADER_WORDS = 8
 RAM_BASE = 0x20000000
 RAM_SIZE = 8 * 1024
 
 BLOCK_FIELDS = [
-    "magic0", "magic1", "version", "tick_addr", "seq", "ack_seq", "hold",
+    "magic0", "magic1", "format", "block_words", "fw_version", "fw_build", "fw_flags", "tick_addr",
+    "seq", "ack_seq", "hold",
     "anchor_tick", "anchor_us_lo", "anchor_us_hi", "corr_ppb",
     "epoch_us_lo", "epoch_us_hi", "period_us",
     "uid0", "uid1", "uid2", "uid3",
@@ -117,6 +127,10 @@ class Block:
         return self.ack_seq != 0 and self.ack_seq == self.seq
 
     @property
+    def version_text(self) -> str:
+        return describe_header(parse_header(self.words))
+
+    @property
     def uid_bytes(self) -> bytes:
         return b"".join(self.words[W[f"uid{i}"]].to_bytes(4, "little") for i in range(4))
 
@@ -144,6 +158,61 @@ class Block:
                        max_c=s32(self.words[W["temp_max_cdeg"]]) / 100,
                        mean_c=s32(self.words[W["temp_sum_cdeg"]]) / n / 100)
         return out
+
+
+@dataclass
+class Header:
+    """The fixed first words of a sync block, parsed; valid for any format, including ones we cannot speak."""
+    addr: int
+    legacy: bool            # a pre-header layout (formats 1-3): only the format number is known
+    major: int
+    minor: int
+    block_words: int | None
+    fw: tuple | None        # (major, minor, patch)
+    build: int | None       # git commit prefix; 0 = unknown
+    dirty: bool
+    tick_addr: int
+
+
+def parse_header(words, addr: int = 0) -> Header:
+    """Words 0..7 of a block. Formats 1-3 had a bare small integer in word 2 and the tick address in word 3."""
+    if words[2] < 0x10000:
+        return Header(addr, True, words[2], 0, None, None, None, False, words[3])
+    f = words[W["fw_version"]]
+    return Header(addr, False, words[2] >> 16, words[2] & 0xFFFF, words[W["block_words"]],
+                  (f >> 16 & 0xFF, f >> 8 & 0xFF, f & 0xFF), words[W["fw_build"]],
+                  bool(words[W["fw_flags"]] & 1), words[W["tick_addr"]])
+
+
+def describe_header(h: Header) -> str:
+    if h.legacy:
+        return f"wire format {h.major} (older than version reporting; firmware version unknown)"
+    fw = ".".join(str(n) for n in h.fw)
+    build = f"build {h.build:08x}{'+dirty' if h.dirty else ''}" if h.build else "build unknown"
+    return f"firmware {fw} ({build}), wire format {h.major}.{h.minor}"
+
+
+def check_compatible(h: Header) -> None:
+    ours = f"{FORMAT_MAJOR}.{FORMAT_MINOR}"
+    if h.legacy or h.major != FORMAT_MAJOR:
+        raise SyncError(f"this unit runs {describe_header(h)}, but this script speaks {ours}. "
+                        "Reflash the unit with the current firmware, or use a lb_sync.py from the same release.")
+    if h.minor < FORMAT_MINOR:
+        raise SyncError(f"this unit runs {describe_header(h)}, older than {ours}: it lacks fields this "
+                        "script needs. Reflash it with the current firmware.")
+    if h.block_words is None or h.block_words < BLOCK_WORDS:
+        raise SyncError(f"this unit's sync block is {h.block_words} words; this script needs {BLOCK_WORDS} "
+                        f"({describe_header(h)})")
+    if not (RAM_BASE <= h.tick_addr < RAM_BASE + RAM_SIZE):
+        raise SyncError(f"tick_addr 0x{h.tick_addr:08x} is not in RAM")
+
+
+def find_blocks(target) -> list:
+    """Headers of every sync block in RAM, of any format (found by the two magic words alone)."""
+    words = target.read_memory_block32(RAM_BASE, RAM_SIZE // 4)
+    return [parse_header(words[i:i + HEADER_WORDS], RAM_BASE + 4 * i)
+            for i in range(len(words) - HEADER_WORDS)
+            if words[i] == MAGIC0 and words[i + 1] == MAGIC1]
 
 
 class HostClock:
@@ -180,24 +249,15 @@ class Device:
     def __init__(self, target, clock=None):
         self.t = target
         self.clock = clock or HostClock()
-        self.addr = self._find_block()
-        blk = self.read_block()
-        if blk.version != VERSION:
-            raise SyncError(f"sync block version {blk.version}, this script speaks {VERSION}")
-        if not (RAM_BASE <= blk.tick_addr < RAM_BASE + RAM_SIZE):
-            raise SyncError(f"tick_addr 0x{blk.tick_addr:08x} is not in RAM")
-        self.tick_addr = blk.tick_addr
-
-    def _find_block(self) -> int:
-        words = self.t.read_memory_block32(RAM_BASE, RAM_SIZE // 4)
-        hits = [RAM_BASE + 4 * i for i in range(len(words) - BLOCK_WORDS)
-                if words[i] == MAGIC0 and words[i + 1] == MAGIC1
-                and words[i + W["version"]] == VERSION]
-        if not hits:
+        found = find_blocks(target)
+        if not found:
             raise SyncError("no Lightning Bugs sync block in RAM — is lb_sync.h firmware flashed and running?")
-        if len(hits) > 1:
-            raise SyncError("multiple sync-block candidates in RAM: " + ", ".join(f"0x{a:08x}" for a in hits))
-        return hits[0]
+        if len(found) > 1:
+            raise SyncError("multiple sync-block candidates in RAM: " + ", ".join(f"0x{h.addr:08x}" for h in found))
+        self.header = found[0]
+        check_compatible(self.header)
+        self.addr = self.header.addr
+        self.tick_addr = self.header.tick_addr
 
     def read_block(self) -> Block:
         return Block(self.addr, list(self.t.read_memory_block32(self.addr, BLOCK_WORDS)))
@@ -435,6 +495,10 @@ def visit_record(kind: str, prev: Block, fit: Fit, corr_ppb: int, long_slope: fl
         "kind": kind,
         "wall_s": round(time.time(), 3),
         "uid": prev.uid, "short_uid": prev.short_uid,
+        "fw": ".".join(str(n) for n in parse_header(prev.words).fw),
+        "fw_build": f"{prev.fw_build:08x}" if prev.fw_build else "",
+        "fw_dirty": bool(prev.fw_flags & 1),
+        "format": f"{prev.format >> 16}.{prev.format & 0xFFFF}",
         "prev_synced": prev.synced,
         "rate_source": "long" if long_slope is not None else "short",
         "raw_rate_ppm": round((rate_slope / 1000.0 - 1.0) * 1e6, 3),   # device clock error, + = fast
@@ -464,7 +528,7 @@ def cmd_resync(dev: Device, args, log=print) -> dict:
     one is given.
     """
     prev = dev.read_block()
-    log(f"Device {prev.short_uid}  (UID {prev.uid or 'not reported'})")
+    log(f"Device {prev.short_uid}  (UID {prev.uid or 'not reported'}); {prev.version_text}")
     if not prev.synced:
         if args.no_fallback:
             raise SyncError("device is not synced (power-cycled?); run a full `sync`")
@@ -524,10 +588,27 @@ def cmd_resync(dev: Device, args, log=print) -> dict:
     return rec
 
 
+def cmd_info(target, args, log=print) -> None:
+    """What is this unit running? Works with any wire format, including ones this script cannot speak."""
+    found = find_blocks(target)
+    if not found:
+        raise SyncError("no Lightning Bugs sync block in RAM (not running this firmware, or asleep/held in reset?)")
+    for h in found:
+        log(f"Sync block at 0x{h.addr:08x}: {describe_header(h)}")
+        try:
+            check_compatible(h)
+            log(f"  compatible with this lb_sync.py (speaks wire format {FORMAT_MAJOR}.{FORMAT_MINOR})")
+        except SyncError:
+            log(f"  NOT compatible with this lb_sync.py (speaks wire format {FORMAT_MAJOR}.{FORMAT_MINOR}): reflash the unit")
+        if not h.legacy and h.build == 0:
+            log("  (built outside tools/lb_flash.py: no git commit stamped in)")
+
+
 def cmd_status(dev: Device, args, log=print) -> dict:
     blk = dev.read_block()
     log(f"Sync block at 0x{blk.addr:08x}, tick @ 0x{blk.tick_addr:08x}, hold={blk.hold}")
-    log(f"Device {blk.short_uid}  (UID {blk.uid or 'not reported'}); {temp_text(blk.temperature())}")
+    log(f"Device {blk.short_uid}  (UID {blk.uid or 'not reported'}); {blk.version_text}")
+    log(f"Temperature: {temp_text(blk.temperature())}")
     log(f"Power: {power_text(blk)}")
     if not blk.synced:
         log("Not synced." + (f" (seq {blk.seq}, ack {blk.ack_seq})" if blk.seq else ""))
@@ -658,8 +739,13 @@ def drift_report(recs: list[dict]) -> dict:
         means = [d["rate_mean_ppm"] for d in devices.values()]
         if len(means) > 1:
             pooled["between_device_sd_ppm"] = statistics.stdev(means)
+    firmware = {}
+    for r in recs:
+        if r.get("fw"):
+            key = f"{r['fw']} ({r['fw_build'] or 'build unknown'}{'+dirty' if r.get('fw_dirty') else ''}), format {r.get('format', '?')}"
+            firmware[key] = firmware.get(key, 0) + 1
     return {"devices": devices, "pooled": pooled, "skipped": len(recs) - len(vis),
-            "battery": battery_report(recs)}
+            "battery": battery_report(recs), "firmware": firmware}
 
 
 LOW_BATT_MV = 3600       # lb_power_policy.h LB_LOW_MV: where the firmware protects the cell
@@ -701,6 +787,10 @@ def print_battery(bat: dict, out=print) -> None:
 
 def print_report(rep: dict, out=print) -> None:
     p = rep["pooled"]
+    if rep.get("firmware"):
+        out("firmware in this log: " + "; ".join(f"{k} x{n}" for k, n in sorted(rep["firmware"].items())))
+        if len(rep["firmware"]) > 1:
+            out("  (more than one build: drift figures may mix firmware versions)")
     print_battery(rep.get("battery", {}), out)
     if not p["visits"]:
         out("No usable visits yet (need `resync` visits with a long baseline and a temperature reading).")
@@ -758,7 +848,8 @@ def open_session(args):
     return session
 
 
-def run_with_device(args, fn):
+def run_with_target(args, fn, make=lambda target: Device(target)):
+    """Open the probe (retrying for --wait seconds), build the handle with `make`, run `fn(handle, args)`."""
     deadline = time.monotonic() + (args.wait if getattr(args, "wait", 0) else 0)
     while True:
         try:
@@ -767,7 +858,7 @@ def run_with_device(args, fn):
                 if getattr(args, "reset", False):
                     target.reset()           # software reset → firmware re-enters boot guard
                     time.sleep(0.3)
-                result = fn(Device(target), args)
+                result = fn(make(target), args)
                 if (isinstance(result, dict) and result.get("kind")
                         and not getattr(args, "no_log", False)):
                     append_log(args.log, result)
@@ -779,6 +870,10 @@ def run_with_device(args, fn):
                     raise
                 raise SyncError(f"SWD connection failed: {e}")
             time.sleep(0.2)
+
+
+def run_with_device(args, fn):
+    return run_with_target(args, fn)
 
 
 def cmd_list(args):
@@ -803,6 +898,8 @@ def main(argv=None):
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("list", help="list debug probes")
+    ip = sub.add_parser("info", help="firmware version and wire format of the connected unit (any format)")
+    ip.add_argument("--wait", type=float, default=0, help="keep retrying the SWD connection for this many seconds")
 
     sp = sub.add_parser("sync", help="measure and write a sync")
     sp.add_argument("--duration", type=float, help="sampling time in s (default 600, or 30 with --refine)")
@@ -854,6 +951,8 @@ def main(argv=None):
             cmd_list(args)
         elif args.cmd == "report":
             cmd_report(args)
+        elif args.cmd == "info":
+            run_with_target(args, cmd_info, make=lambda target: target)
         else:
             fn = {"sync": cmd_sync, "resync": cmd_resync, "status": cmd_status,
                   "hold": cmd_hold, "release": cmd_release}[args.cmd]

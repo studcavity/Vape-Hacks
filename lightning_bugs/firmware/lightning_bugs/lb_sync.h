@@ -33,13 +33,23 @@
  *   since the last adopted sync, so each host visit can log which chip it was
  *   and how warm it ran. lbWaitUntil() takes the readings while idle.
  *
- * The block layout must match BLOCK_FIELDS in host/lb_sync.py. Bump
- * LB_VERSION on any layout change.
+ * Wire format and version reporting
+ *   The first eight words never change position or meaning:
+ *     [0][1] magic   [2] format (major<<16 | minor)   [3] block size in words
+ *     [4] firmware version (major<<16 | minor<<8 | patch)   [5] build ID
+ *     [6] build flags (bit0: built from a dirty tree)   [7] &uwTick
+ *   so a host can always find a block and say what it is, even one it cannot
+ *   talk to. Compatibility rule: a different MAJOR is a different layout. A
+ *   higher MINOR only appends words at the end (the block size grows), so a
+ *   host that speaks the same major and a minor no higher than the unit's
+ *   still works. Anything else that changes order or meaning needs a new major.
+ *   The layout must match BLOCK_FIELDS in host/lb_sync.py.
  */
 #pragma once
 #include <Arduino.h>
 #include <stdint.h>
 #include "lb_power_policy.h"
+#include "lb_version.h"
 
 // HAL millisecond tick that backs millis(). Its address is published in the
 // block so the host can read it directly.
@@ -47,48 +57,58 @@ extern "C" { extern volatile uint32_t uwTick; }
 
 #define LB_MAGIC0   0x4C425359u            // 'LBSY'
 #define LB_MAGIC1   (LB_MAGIC0 ^ 0xFFFFFFFFu)
-#define LB_VERSION  3u
+#define LB_FORMAT_MAJOR 4u
+#define LB_FORMAT_MINOR 0u
+#define LB_FORMAT       ((LB_FORMAT_MAJOR << 16) | LB_FORMAT_MINOR)
 #define LB_DEFAULT_PERIOD_US 500000u       // 120 BPM until the host says otherwise
 #define LB_NO_TEMP  ((int32_t)0x80000000)
 #define LB_TEMP_EVERY_MS 10000u            // idle temperature sampling interval
 
 struct LbSyncBlock {
+    // ── fixed header: never moves (see "Wire format and version reporting") ──
     uint32_t magic0;                   // [0]  LB_MAGIC0
     uint32_t magic1;                   // [1]  LB_MAGIC1
-    uint32_t version;                  // [2]  LB_VERSION
-    uint32_t tick_addr;                // [3]  &uwTick
-    volatile uint32_t seq;             // [4]  seqlock: odd = host mid-write
-    volatile uint32_t ack_seq;         // [5]  firmware copies seq once adopted
-    volatile uint32_t hold;            // [6]  host sets non-zero to stay in boot guard
-    volatile uint32_t anchor_tick;     // [7]  local millis() at the anchor
-    volatile uint32_t anchor_us_lo;    // [8]  master µs at the anchor (int64)
-    volatile uint32_t anchor_us_hi;    // [9]
-    volatile int32_t  corr_ppb;        // [10] master = local * (1 + corr_ppb/1e9)
-    volatile uint32_t epoch_us_lo;     // [11] master µs of beat 0 (int64)
-    volatile uint32_t epoch_us_hi;     // [12]
-    volatile uint32_t period_us;       // [13] beat period
+    uint32_t format;                   // [2]  LB_FORMAT: major<<16 | minor
+    uint32_t block_words;              // [3]  size of this struct in 32-bit words
+    uint32_t fw_version;               // [4]  LB_FW_VERSION: major<<16 | minor<<8 | patch
+    uint32_t fw_build;                 // [5]  git commit (first 8 hex digits), 0 = unknown
+    uint32_t fw_flags;                 // [6]  bit0 = built from a dirty tree
+    uint32_t tick_addr;                // [7]  &uwTick
+    // ── sync ──
+    volatile uint32_t seq;             // [8]  seqlock: odd = host mid-write
+    volatile uint32_t ack_seq;         // [9]  firmware copies seq once adopted
+    volatile uint32_t hold;            // [10] host sets non-zero to stay in boot guard
+    volatile uint32_t anchor_tick;     // [11] local millis() at the anchor
+    volatile uint32_t anchor_us_lo;    // [12] master µs at the anchor (int64)
+    volatile uint32_t anchor_us_hi;    // [13]
+    volatile int32_t  corr_ppb;        // [14] master = local * (1 + corr_ppb/1e9)
+    volatile uint32_t epoch_us_lo;     // [15] master µs of beat 0 (int64)
+    volatile uint32_t epoch_us_hi;     // [16]
+    volatile uint32_t period_us;       // [17] beat period
     // ── identity (written once at boot) ──
-    uint32_t uid0;                     // [14] chip UID, 16 bytes from 0x1FFF0E00 (little-endian words)
-    uint32_t uid1;                     // [15]
-    uint32_t uid2;                     // [16]
-    uint32_t uid3;                     // [17]
+    uint32_t uid0;                     // [18] chip UID, 16 bytes from 0x1FFF0E00 (little-endian words)
+    uint32_t uid1;                     // [19]
+    uint32_t uid2;                     // [20]
+    uint32_t uid3;                     // [21]
     // ── die temperature, sampled while idle; min/max/sum/n restart when a sync is adopted ──
-    volatile int32_t  temp_cdeg;       // [18] latest, 0.01 degC; LB_NO_TEMP if never read
-    volatile int32_t  temp_min_cdeg;   // [19] since the last sync was adopted
-    volatile int32_t  temp_max_cdeg;   // [20]
-    volatile int32_t  temp_sum_cdeg;   // [21] mean = sum / n
-    volatile uint32_t temp_n;          // [22] samples in sum
-    volatile uint32_t temp_raw;        // [23] latest ADC counts, temperature channel (12-bit)
-    volatile uint32_t vref_raw;        // [24] latest ADC counts, VREFINT channel (12-bit)
-    volatile uint32_t stats_tick;      // [25] millis() when the temperature stats were last restarted
+    volatile int32_t  temp_cdeg;       // [22] latest, 0.01 degC; LB_NO_TEMP if never read
+    volatile int32_t  temp_min_cdeg;   // [23] since the last sync was adopted
+    volatile int32_t  temp_max_cdeg;   // [24]
+    volatile int32_t  temp_sum_cdeg;   // [25] mean = sum / n
+    volatile uint32_t temp_n;          // [26] samples in sum
+    volatile uint32_t temp_raw;        // [27] latest ADC counts, temperature channel (12-bit)
+    volatile uint32_t vref_raw;        // [28] latest ADC counts, VREFINT channel (12-bit)
+    volatile uint32_t stats_tick;      // [29] millis() when the temperature stats were last restarted
     // ── battery protection (see lb_power_policy.h) ──
-    volatile uint32_t batt_mv;         // [26] latest supply/battery voltage in mV, 0 = never read
-    volatile uint32_t power_state;     // [27] bit0 = low-battery latched, bit1 = USB present
-    volatile uint32_t wake_count;      // [28] stop-mode wakes since boot
+    volatile uint32_t batt_mv;         // [30] latest supply/battery voltage in mV, 0 = never read
+    volatile uint32_t power_state;     // [31] bit0 = low-battery latched, bit1 = USB present
+    volatile uint32_t wake_count;      // [32] stop-mode wakes since boot
 };
+#define LB_BLOCK_WORDS (sizeof(LbSyncBlock) / 4)
 
 __attribute__((used, aligned(4))) static LbSyncBlock lbBlock = {
-    LB_MAGIC0, LB_MAGIC1, LB_VERSION, (uint32_t)(uintptr_t)&uwTick,
+    LB_MAGIC0, LB_MAGIC1, LB_FORMAT, LB_BLOCK_WORDS,
+    LB_FW_VERSION, LB_BUILD_ID, (LB_BUILD_DIRTY ? 1u : 0u), (uint32_t)(uintptr_t)&uwTick,
     0, 0, 0, 0, 0, 0, 0, 0, 0, LB_DEFAULT_PERIOD_US,
     0, 0, 0, 0,
     LB_NO_TEMP, 0, 0, 0, 0, 0, 0, 0,

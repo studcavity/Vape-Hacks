@@ -49,9 +49,11 @@ In practice: at 120 BPM, 1% error is 5 ms per beat, so two devices can drift a f
 ```
 lightning_bugs/
 ├── host/
-│   ├── lb_sync.py          pyocd sync tool (list / sync / resync / report / status / hold / release)
+│   ├── lb_sync.py          pyocd sync tool (list / info / sync / resync / report / status / hold / release)
 │   └── test_lb_sync.py     simulated-device tests (no hardware needed)
 └── firmware/lightning_bugs/
+    ├── lb_version.h        firmware version, build ID stamped by lb_flash.py
+    ├── lb_power_policy.h   low-battery rules (pure C, tested natively)
     ├── lb_sync.h           sync block, master clock, beat grid, boot guard, chip UID, die temperature
     ├── lightning_bugs.ino  timed light show (comet chase), dark between shows
     └── matrix_map.h        LED map (copied from the main firmware)
@@ -97,6 +99,20 @@ STOP freezes `millis()`, so a unit that has slept is **unsynced**: after chargin
 > **Before flashing a sealed unit with this firmware, on the canary (open) unit:** (1) with `status`, plug and unplug USB and confirm the "USB input" reading follows it (high = plugged); the stock-firmware comment says high, but the disassembly note on when the stock firmware sleeps hints at the opposite, and the 3.40 V floor is the only protection if it is wrong; (2) move the slide switch through its three positions and check each wakes the unit from sleep, with the unit's PA2 level and bias unknown (it is read as analog by the stock firmware, and mid-rail may sit on the digital threshold); (3) after a wake, check that SWD answers and that `millis()` runs at the right rate (the manual says the HSI is selected on exit; its frequency after exit is not verified); (4) drive it below 3.60 V with a bench supply to see it latch, blink and sleep, and note the current in sleep with a meter. If STOP misbehaves the unit cannot be reached over SWD until it wakes; that is why this is canary-first, and why the entry is one function (`enterStopUntilWake` in `lightning_bugs.ino`), waived with `lb-allow-swd-risk` on its three register lines only. No IWDG failsafe is included (a started IWDG resets the chip after at most about 30 s, which would turn sleep into a reset every 30 s, roughly 40 µA more).
 
 > **Verified (no hardware):** the host code, against a simulated device with a temperature-dependent clock (`host/test_lb_sync.py`), the battery policy compiled and driven natively (`tests/test_lb_power_policy.py`), and that the sketch builds and passes the safety checks. **Not verified on a unit:** that `analogRead(ATEMP)`/`analogRead(AVREF)` from the py32duino core return sensible counts on this chip (the raw counts are published in the block, `temp_raw` and `vref_raw`, so check them first), the LED driver's power-up time after `PA15` goes low (`LED_WAKE_LEAD_MS`, 100 ms), and the SWD behaviour of `resync` on a running unit.
+
+## What is this unit running? `info`, firmware versions and the wire format
+
+```sh
+python3 host/lb_sync.py info
+# Sync block at 0x20000400: firmware 0.4.0 (build a13ccff2+dirty), wire format 4.0
+#   compatible with this lb_sync.py (speaks wire format 4.0)
+```
+
+Every unit reports three things in the first eight words of its sync block, which never move or change meaning again: the **wire format** (`major.minor`), the **firmware version** (`LB_FW_*` in `firmware/lightning_bugs/lb_version.h`, bumped by hand), and a **build ID** (the first 8 hex digits of the git commit, plus `+dirty` if the tree had uncommitted changes). `tools/lb_flash.py build` stamps the build ID in with a compiler flag and then reads the header back out of the binary, so a build that cannot say what it is fails instead of flashing. A build made some other way (Arduino IDE) reports "build unknown".
+
+`info` works against any format, including ones this script cannot speak, and it recognises the older formats 1-3 (before version reporting) as "wire format N, firmware unknown" rather than "no sync block". `status`, `resync` and `sync` print the same line, every log entry records `fw`, `fw_build`, `fw_dirty` and `format`, and `report` lists the firmware versions in the log and warns when they are mixed.
+
+**Compatibility rule.** A different *major* is a different layout: the host refuses it and says which firmware and format the unit has and which it speaks. A higher *minor* only ever appends words at the end of the block (the block size word grows), so a script with the same major and a minor no higher than the unit's keeps working; a unit with an older minor is refused because it lacks fields. Reordering or reinterpreting any word needs a new major (and `FORMAT_MAJOR` in `lb_sync.py`, `LB_FORMAT_MAJOR` in `lb_sync.h`). Format 4 is the one breaking change that introduced this scheme: units still running formats 1-3 need reflashing once.
 
 ## Build and flash wrapper
 

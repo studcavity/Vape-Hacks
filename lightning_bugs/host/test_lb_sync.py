@@ -34,7 +34,9 @@ class FakeClock:
 class FakeTarget:
     """A PY32 running lb_sync.h firmware whose clock is `ppm` fast, read over a jittery probe."""
     def __init__(self, clock, ppm, rng, boot_tick=4_294_000_000,
-                 uid=bytes(range(0x41, 0x51)), temp_fn=lambda t_s: 25.0):
+                 uid=bytes(range(0x41, 0x51)), temp_fn=lambda t_s: 25.0,
+                 fw=(0, 4, 0), build=0x1A2B3C4D, flags=0, fmt=(lb.FORMAT_MAJOR, lb.FORMAT_MINOR),
+                 extra_words=0):
         self.clock, self.ppm, self.rng = clock, ppm, rng
         self.boot_ns = clock.t_ns
         self.seg_ns = clock.t_ns                        # when the current ppm took effect
@@ -43,7 +45,13 @@ class FakeTarget:
         self.uid, self.temp_fn = uid, temp_fn
         self.temp_hist, self.temp_next_s = [], 1.0      # one sample per 10 s, as the firmware does
         self.ram = {}
-        init = [lb.MAGIC0, lb.MAGIC1, lb.VERSION, TICK_ADDR] + [0] * (lb.BLOCK_WORDS - 4)
+        init = [0] * (lb.BLOCK_WORDS + extra_words)
+        init[lb.W["magic0"]], init[lb.W["magic1"]] = lb.MAGIC0, lb.MAGIC1
+        init[lb.W["format"]] = fmt[0] << 16 | fmt[1]
+        init[lb.W["block_words"]] = lb.BLOCK_WORDS + extra_words
+        init[lb.W["fw_version"]] = fw[0] << 16 | fw[1] << 8 | fw[2]
+        init[lb.W["fw_build"]], init[lb.W["fw_flags"]] = build, flags
+        init[lb.W["tick_addr"]] = TICK_ADDR
         init[lb.W["period_us"]] = 500_000
         for i in range(4):
             init[lb.W[f"uid{i}"]] = int.from_bytes(uid[4 * i:4 * i + 4], "little")
@@ -284,6 +292,96 @@ class ResyncTests(unittest.TestCase):
         self.quiet(dev, every=1800.0, epoch=5.0)
         blk = dev.read_block()
         self.assertEqual((blk.period_us, blk.epoch_us), (1_800_000_000, 5_000_000))
+
+
+class VersionTests(unittest.TestCase):
+    def target(self, **kw):
+        clock = FakeClock()
+        return clock, FakeTarget(clock, 0, random.Random(1), **kw)
+
+    def test_units_report_firmware_and_format(self):
+        clock, tgt = self.target(fw=(1, 2, 3), build=0xDEADBEEF, flags=1)
+        dev = lb.Device(tgt, clock)
+        h = dev.header
+        self.assertEqual((h.major, h.minor, h.fw, h.build, h.dirty), (4, 0, (1, 2, 3), 0xDEADBEEF, True))
+        self.assertEqual(dev.read_block().version_text,
+                         "firmware 1.2.3 (build deadbeef+dirty), wire format 4.0")
+
+    def test_unstamped_build_says_unknown(self):
+        _, tgt = self.target(build=0)
+        self.assertIn("build unknown", lb.describe_header(lb.find_blocks(tgt)[0]))
+
+    def test_other_major_is_refused_with_a_useful_message(self):
+        clock, tgt = self.target(fmt=(5, 0), fw=(0, 9, 0))
+        with self.assertRaises(lb.SyncError) as cm:
+            lb.Device(tgt, clock)
+        msg = str(cm.exception)
+        self.assertIn("firmware 0.9.0", msg)
+        self.assertIn("wire format 5.0", msg)
+        self.assertIn("speaks 4.0", msg)
+
+    def test_older_minor_is_refused_newer_minor_is_accepted(self):
+        old = lb.FORMAT_MINOR
+        try:
+            lb.FORMAT_MINOR = 2                          # pretend this script speaks 4.2
+            clock, tgt = self.target(fmt=(4, 1))
+            with self.assertRaises(lb.SyncError) as cm:
+                lb.Device(tgt, clock)
+            self.assertIn("lacks fields", str(cm.exception))
+            clock, tgt = self.target(fmt=(4, 3), extra_words=5)      # newer minor appends words
+            dev = lb.Device(tgt, clock)
+            self.assertEqual(len(dev.read_block().words), lb.BLOCK_WORDS)
+        finally:
+            lb.FORMAT_MINOR = old
+
+    def test_truncated_block_is_refused(self):
+        clock, tgt = self.target()
+        tgt.ram[BLOCK_ADDR + 4 * lb.W["block_words"]] = lb.BLOCK_WORDS - 3
+        with self.assertRaises(lb.SyncError) as cm:
+            lb.Device(tgt, clock)
+        self.assertIn("words", str(cm.exception))
+
+    def test_legacy_block_is_recognised_not_mistaken_for_no_block(self):
+        clock, tgt = self.target()
+        # Formats 1-3: [2] = small version number, [3] = &uwTick.
+        tgt.ram[BLOCK_ADDR + 8] = 3
+        tgt.ram[BLOCK_ADDR + 12] = TICK_ADDR
+        (h,) = lb.find_blocks(tgt)
+        self.assertTrue(h.legacy)
+        self.assertEqual(h.major, 3)
+        self.assertIn("older than version reporting", lb.describe_header(h))
+        with self.assertRaises(lb.SyncError) as cm:
+            lb.Device(tgt, clock)
+        self.assertIn("wire format 3", str(cm.exception))
+        self.assertNotIn("no Lightning Bugs sync block", str(cm.exception))
+
+    def test_info_reports_any_format_without_raising(self):
+        for fmt, expect in (((4, 0), "compatible"), ((9, 1), "NOT compatible")):
+            _, tgt = self.target(fmt=fmt)
+            out = []
+            lb.cmd_info(tgt, None, log=out.append)
+            self.assertTrue(any(expect in line for line in out), msg=out)
+            self.assertTrue(any("firmware 0.4.0" in line for line in out))
+
+    def test_info_without_a_block(self):
+        class Empty:
+            def read_memory_block32(self, a, n):
+                return [0] * n
+        with self.assertRaises(lb.SyncError):
+            lb.cmd_info(Empty(), None)
+
+    def test_visit_log_and_report_carry_the_version(self):
+        clock = FakeClock()
+        tgt = FakeTarget(clock, 100.0, random.Random(2), fw=(0, 4, 1), build=0xABC12345)
+        dev = lb.Device(tgt, clock)
+        rec = lb.cmd_sync(dev, sync_args(duration=60), log=lambda *a: None)
+        self.assertEqual((rec["fw"], rec["fw_build"], rec["fw_dirty"], rec["format"]),
+                         ("0.4.1", "abc12345", False, "4.0"))
+        rep = lb.drift_report([rec, dict(rec, fw="0.3.0", fw_build="")])
+        out = []
+        lb.print_report(rep, out.append)
+        self.assertTrue(any("firmware in this log" in line and "0.4.1" in line for line in out))
+        self.assertTrue(any("more than one build" in line for line in out))
 
 
 class GridTests(unittest.TestCase):
