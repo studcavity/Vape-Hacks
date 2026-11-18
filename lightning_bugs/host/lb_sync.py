@@ -40,35 +40,30 @@ import statistics
 import sys
 import time
 from dataclasses import dataclass
+from functools import cached_property
 from pathlib import Path
+
+from lb_catalog import CATALOG, s32
+from lb_compat import (HEADER_WORDS, MAGIC0, MAGIC1, Header, Unit, Unsupported, describe_header,  # noqa: F401
+                       parse_header)
 
 # ─── Block layout (must match LbSyncBlock in lb_sync.h) ──────────────────────
 # The first HEADER_WORDS words never move or change meaning, so any host can find a block
 # and report what it is. Format compatibility: a different MAJOR is a different layout; a
-# MINOR only appends words at the end, so a unit with the same major and a minor at least
-# as high as ours has every field we use.
-MAGIC0 = 0x4C425359                      # 'LBSY'
-MAGIC1 = MAGIC0 ^ 0xFFFFFFFF
-FORMAT_MAJOR = 4
-FORMAT_MINOR = 0
-HEADER_WORDS = 8
+# MINOR only appends words at the end. Units are read with their own format's layout and each
+# command checks the features it needs (format, firmware, model): see lb_catalog.py / lb_compat.py.
+FORMAT_MAJOR = 4                         # the layout this script was written for; minors are in lb_catalog.FORMATS
+FORMAT_MINOR = CATALOG.formats.latest(FORMAT_MAJOR)
+SPEAKS = f"{FORMAT_MAJOR}.0" + (f"-{FORMAT_MAJOR}.{FORMAT_MINOR}" if FORMAT_MINOR else "")   # "4.0", later "4.0-4.2"
 RAM_BASE = 0x20000000
 RAM_SIZE = 8 * 1024
 
-BLOCK_FIELDS = [
-    "magic0", "magic1", "format", "block_words", "fw_version", "fw_build", "fw_flags", "tick_addr",
-    "seq", "ack_seq", "hold",
-    "anchor_tick", "anchor_us_lo", "anchor_us_hi", "corr_ppb",
-    "epoch_us_lo", "epoch_us_hi", "period_us",
-    "uid0", "uid1", "uid2", "uid3",
-    "temp_cdeg", "temp_min_cdeg", "temp_max_cdeg", "temp_sum_cdeg", "temp_n",
-    "temp_raw", "vref_raw", "stats_tick",
-    "batt_mv", "power_state", "wake_count",
-]
+# The newest known layout of FORMAT_MAJOR. Units with an older minor are read with their own (shorter)
+# layout, see Device.layout; these names are the current one, shared with lb_sync.h.
+BLOCK_FIELDS = list(CATALOG.formats.layout(FORMAT_MAJOR, FORMAT_MINOR).fields)
 W = {name: i for i, name in enumerate(BLOCK_FIELDS)}
 BLOCK_WORDS = len(BLOCK_FIELDS)
 
-NO_TEMP = -(1 << 31)                     # LB_NO_TEMP in lb_sync.h
 MAX_CORR_PPB = 50_000_000                # 5 %: anything bigger is not a real HSI error
 U32 = 1 << 32
 
@@ -78,11 +73,6 @@ class SyncError(Exception):
 
 
 # ─── Small helpers ────────────────────────────────────────────────────────────
-def s32(v: int) -> int:
-    v &= 0xFFFFFFFF
-    return v - U32 if v & 0x80000000 else v
-
-
 def s64(lo: int, hi: int) -> int:
     v = (hi << 32) | lo
     return v - (1 << 64) if v & (1 << 63) else v
@@ -102,13 +92,32 @@ def device_master_us(blk: "Block", tick: int) -> int:
 
 @dataclass
 class Block:
+    """A sync block as a list of words, decoded with the layout of the unit's *own* wire format.
+    It knows nothing about how the words arrived (SWD, a log, another link)."""
     addr: int
     words: list
 
+    @cached_property
+    def unit(self) -> Unit:
+        return CATALOG.unit_from_words(self.words, access={"read"})
+
     def __getattr__(self, name):
+        if name == "words":
+            raise AttributeError(name)
+        layout = self.unit.layout
+        if layout is not None and name in layout:
+            return self.words[layout.index[name]]
         if name in W:
-            return self.words[W[name]]
+            raise AttributeError(f"this unit's wire format has no field {name!r}; "
+                                 f"check blk.unit.has({name!r}) or the feature that needs it")
         raise AttributeError(name)
+
+    def has(self, name: str) -> bool:
+        return self.unit.has(name)
+
+    def variant(self, feature: str):
+        """The handling this unit's format/firmware/model gets for a feature, or None."""
+        return CATALOG.variant(self.unit, feature)
 
     @property
     def anchor_us(self) -> int:
@@ -120,7 +129,7 @@ class Block:
 
     @property
     def corr_ppb(self) -> int:
-        return s32(self.words[W["corr_ppb"]])
+        return s32(self.__getattr__("corr_ppb"))
 
     @property
     def synced(self) -> bool:
@@ -132,7 +141,8 @@ class Block:
 
     @property
     def uid_bytes(self) -> bytes:
-        return b"".join(self.words[W[f"uid{i}"]].to_bytes(4, "little") for i in range(4))
+        v = self.variant("identity")
+        return v.impl(self) if v else b"\0" * 16
 
     @property
     def uid(self) -> str:
@@ -147,62 +157,28 @@ class Block:
         return b[4:5].hex() + "-" + b[8:12].hex() if any(b) else "?"
 
     def temperature(self) -> dict | None:
-        """Temperature stats since the last adopted sync, in degC; None if there is no reading."""
-        t = s32(self.words[W["temp_cdeg"]])
-        if t == NO_TEMP:
-            return None
-        n = self.words[W["temp_n"]]
-        out = {"now_c": t / 100, "n": n, "raw": self.temp_raw, "vref_raw": self.vref_raw}
-        if n:
-            out.update(min_c=s32(self.words[W["temp_min_cdeg"]]) / 100,
-                       max_c=s32(self.words[W["temp_max_cdeg"]]) / 100,
-                       mean_c=s32(self.words[W["temp_sum_cdeg"]]) / n / 100)
-        return out
+        """Temperature stats since the last adopted sync, in degC; None if there is no reading
+        (or this unit's format/firmware/model cannot report one)."""
+        v = self.variant("temperature")
+        return v.impl(self) if v else None
 
-
-@dataclass
-class Header:
-    """The fixed first words of a sync block, parsed; valid for any format, including ones we cannot speak."""
-    addr: int
-    legacy: bool            # a pre-header layout (formats 1-3): only the format number is known
-    major: int
-    minor: int
-    block_words: int | None
-    fw: tuple | None        # (major, minor, patch)
-    build: int | None       # git commit prefix; 0 = unknown
-    dirty: bool
-    tick_addr: int
-
-
-def parse_header(words, addr: int = 0) -> Header:
-    """Words 0..7 of a block. Formats 1-3 had a bare small integer in word 2 and the tick address in word 3."""
-    if words[2] < 0x10000:
-        return Header(addr, True, words[2], 0, None, None, None, False, words[3])
-    f = words[W["fw_version"]]
-    return Header(addr, False, words[2] >> 16, words[2] & 0xFFFF, words[W["block_words"]],
-                  (f >> 16 & 0xFF, f >> 8 & 0xFF, f & 0xFF), words[W["fw_build"]],
-                  bool(words[W["fw_flags"]] & 1), words[W["tick_addr"]])
-
-
-def describe_header(h: Header) -> str:
-    if h.legacy:
-        return f"wire format {h.major} (older than version reporting; firmware version unknown)"
-    fw = ".".join(str(n) for n in h.fw)
-    build = f"build {h.build:08x}{'+dirty' if h.dirty else ''}" if h.build else "build unknown"
-    return f"firmware {fw} ({build}), wire format {h.major}.{h.minor}"
+    def power(self) -> dict | None:
+        """Battery voltage (mV or None), low-battery latch, USB and wake count; None if not reported."""
+        v = self.variant("power")
+        return v.impl(self) if v else None
 
 
 def check_compatible(h: Header) -> None:
-    ours = f"{FORMAT_MAJOR}.{FORMAT_MINOR}"
-    if h.legacy or h.major != FORMAT_MAJOR:
-        raise SyncError(f"this unit runs {describe_header(h)}, but this script speaks {ours}. "
+    """Can this script read the unit's block at all? (What it can *do* with it is per command: see
+    lb_catalog.COMMANDS.) A different major, or a pre-header format, has no layout we know; a minor
+    newer than we know is read as its known prefix; an older minor is read with its own layout."""
+    layout = None if h.legacy else CATALOG.formats.layout(h.major, h.minor)
+    if layout is None:
+        raise SyncError(f"this unit runs {describe_header(h)}, but this script speaks {SPEAKS}. "
                         "Reflash the unit with the current firmware, or use a lb_sync.py from the same release.")
-    if h.minor < FORMAT_MINOR:
-        raise SyncError(f"this unit runs {describe_header(h)}, older than {ours}: it lacks fields this "
-                        "script needs. Reflash it with the current firmware.")
-    if h.block_words is None or h.block_words < BLOCK_WORDS:
-        raise SyncError(f"this unit's sync block is {h.block_words} words; this script needs {BLOCK_WORDS} "
-                        f"({describe_header(h)})")
+    if h.block_words is None or h.block_words < layout.words:
+        raise SyncError(f"this unit's sync block is {h.block_words} words; wire format {h.major}.{h.minor} "
+                        f"needs {layout.words} ({describe_header(h)})")
     if not (RAM_BASE <= h.tick_addr < RAM_BASE + RAM_SIZE):
         raise SyncError(f"tick_addr 0x{h.tick_addr:08x} is not in RAM")
 
@@ -258,12 +234,27 @@ class Device:
         check_compatible(self.header)
         self.addr = self.header.addr
         self.tick_addr = self.header.tick_addr
+        self.layout = CATALOG.formats.layout(self.header.major, self.header.minor)
+        self.access = frozenset({"read", "write"})             # SWD can do both
+        self.unit = CATALOG.unit_from_words(self.read_block().words, self.access)
+        self.degraded: list = []
+
+    def require(self, command: str) -> list:
+        """Refuse `command` unless this unit (format, firmware, model) and this connection support it.
+        Returns the optional features it lacks; the command still runs without them."""
+        try:
+            self.degraded = CATALOG.check_command(self.unit, command)
+        except Unsupported as e:
+            raise SyncError(f"{e}. This unit: {describe_header(self.header)}, model {self.unit.model}.") from None
+        return self.degraded
 
     def read_block(self) -> Block:
-        return Block(self.addr, list(self.t.read_memory_block32(self.addr, BLOCK_WORDS)))
+        return Block(self.addr, list(self.t.read_memory_block32(self.addr, self.layout.words)))
 
     def write(self, field: str, value: int) -> None:
-        self.t.write32(self.addr + 4 * W[field], value & 0xFFFFFFFF)
+        if field not in self.layout:
+            raise SyncError(f"this unit's wire format {self.layout.major}.{self.layout.minor} has no {field!r}")
+        self.t.write32(self.addr + 4 * self.layout.index[field], value & 0xFFFFFFFF)
 
     def sample(self, burst: int = 8) -> Sample:
         """Best-of-N read of the tick counter; keeps the shortest round trip."""
@@ -414,7 +405,14 @@ def grid_from_args(args):
     return round(args.epoch * 1e6), period_us
 
 
+def need(dev: Device, command: str, log) -> None:
+    """Refuse the command if this unit/connection cannot do it; note any optional data it will lack."""
+    for st in dev.require(command):
+        log(f"note: this unit cannot report {st.feature} ({'; '.join(st.reasons)}); it will be left out")
+
+
 def cmd_sync(dev: Device, args, log=print) -> dict:
+    need(dev, "sync", log)
     epoch_us, period_us = grid_from_args(args)
     prev = dev.read_block()
     long_slope = None
@@ -473,17 +471,20 @@ def temp_text(t: dict | None) -> str:
 
 def vcc_mv(blk: Block) -> int | None:
     """Battery voltage in mV as the firmware last measured it (VDD is the cell); None if never read."""
-    return blk.batt_mv or None
+    p = blk.power()
+    return p["mv"] if p else None
 
 
 def power_text(blk: Block) -> str:
-    mv = vcc_mv(blk)
-    s = f"{mv / 1000:.3f} V" if mv else "battery not read yet"
-    s += f"; USB input {'high' if blk.power_state & 2 else 'low'}"
-    if blk.power_state & 1:
+    p = blk.power()
+    if p is None:
+        return "not reported by this unit"
+    s = f"{p['mv'] / 1000:.3f} V" if p["mv"] else "battery not read yet"
+    s += f"; USB input {'high' if p['usb'] else 'low'}"
+    if p["low"]:
         s += "; LOW-BATTERY LATCHED (will sleep after its 60 s window)"
-    if blk.wake_count:
-        s += f"; woken from sleep {blk.wake_count}x since boot"
+    if p["wakes"]:
+        s += f"; woken from sleep {p['wakes']}x since boot"
     return s
 
 
@@ -491,23 +492,25 @@ def visit_record(kind: str, prev: Block, fit: Fit, corr_ppb: int, long_slope: fl
                  args, elapsed_s: float | None = None, drift_ms: float | None = None) -> dict:
     """One line of the visit log: what the device looked like when it was plugged in."""
     rate_slope = long_slope if long_slope is not None else fit.slope
+    power = prev.power()
     rec = {
         "kind": kind,
         "wall_s": round(time.time(), 3),
         "uid": prev.uid, "short_uid": prev.short_uid,
-        "fw": ".".join(str(n) for n in parse_header(prev.words).fw),
+        "fw": ".".join(str(n) for n in prev.unit.fw),
         "fw_build": f"{prev.fw_build:08x}" if prev.fw_build else "",
         "fw_dirty": bool(prev.fw_flags & 1),
-        "format": f"{prev.format >> 16}.{prev.format & 0xFFFF}",
+        "format": f"{prev.unit.major}.{prev.unit.minor}",
+        "model": prev.unit.model,
         "prev_synced": prev.synced,
         "rate_source": "long" if long_slope is not None else "short",
         "raw_rate_ppm": round((rate_slope / 1000.0 - 1.0) * 1e6, 3),   # device clock error, + = fast
         "prev_corr_ppb": prev.corr_ppb if prev.synced else None,
         "applied_corr_ppb": corr_ppb,
         "vcc_mv": vcc_mv(prev),
-        "low_battery": bool(prev.power_state & 1),
-        "usb_input": bool(prev.power_state & 2),
-        "wake_count": prev.wake_count,
+        "low_battery": bool(power and power["low"]),
+        "usb_input": bool(power and power["usb"]),
+        "wake_count": power["wakes"] if power else None,
         "temp": prev.temperature(),
     }
     if elapsed_s is not None:
@@ -527,6 +530,7 @@ def cmd_resync(dev: Device, args, log=print) -> dict:
     resolution) replaces a long measurement. The beat grid is kept unless a new
     one is given.
     """
+    need(dev, "resync", log)
     prev = dev.read_block()
     log(f"Device {prev.short_uid}  (UID {prev.uid or 'not reported'}); {prev.version_text}")
     if not prev.synced:
@@ -545,7 +549,7 @@ def cmd_resync(dev: Device, args, log=print) -> dict:
 
     log(f"Previous state: {temp_text(prev.temperature())}")
     log(f"Power: {power_text(prev)}")
-    if prev.power_state & 1:
+    if (prev.power() or {}).get("low"):
         log("  WARNING: battery is low; this unit will go to sleep. Charge it, then resync.")
     drift, sd, last = measure_offset(dev, prev, n=args.offset_samples)
     log(f"Drift since last sync: {drift:+.1f} ms (±{sd:.1f}); positive = device ahead")
@@ -597,14 +601,25 @@ def cmd_info(target, args, log=print) -> None:
         log(f"Sync block at 0x{h.addr:08x}: {describe_header(h)}")
         try:
             check_compatible(h)
-            log(f"  compatible with this lb_sync.py (speaks wire format {FORMAT_MAJOR}.{FORMAT_MINOR})")
         except SyncError:
-            log(f"  NOT compatible with this lb_sync.py (speaks wire format {FORMAT_MAJOR}.{FORMAT_MINOR}): reflash the unit")
+            log(f"  NOT compatible with this lb_sync.py (speaks wire format {SPEAKS}): reflash the unit")
+            continue
+        unit = CATALOG.unit(h.major, h.minor, h.fw, access={"read", "write"})   # as over SWD
+        log(f"  compatible with this lb_sync.py (reads it as wire format {h.major}.{min(h.minor, FORMAT_MINOR)}); model {unit.model}")
+        for st in CATALOG.report(unit):
+            log(f"    {st.feature:<12}" + (f"ok ({st.variant})" if st.ok else "NO: " + "; ".join(st.reasons)))
+        for name in CATALOG.commands:
+            try:
+                lacks = CATALOG.check_command(unit, name)
+                log(f"    {name:<12}" + ("ok" if not lacks else "ok, without " + ", ".join(s.feature for s in lacks)))
+            except Unsupported as e:
+                log(f"    {name:<12}NOT SUPPORTED: {e}")
         if not h.legacy and h.build == 0:
             log("  (built outside tools/lb_flash.py: no git commit stamped in)")
 
 
 def cmd_status(dev: Device, args, log=print) -> dict:
+    need(dev, "status", log)
     blk = dev.read_block()
     log(f"Sync block at 0x{blk.addr:08x}, tick @ 0x{blk.tick_addr:08x}, hold={blk.hold}")
     log(f"Device {blk.short_uid}  (UID {blk.uid or 'not reported'}); {blk.version_text}")
@@ -624,11 +639,13 @@ def cmd_status(dev: Device, args, log=print) -> dict:
 
 
 def cmd_hold(dev: Device, args, log=print):
+    need(dev, "hold", log)
     dev.write("hold", 1)
     log("Hold set: device stays in its boot guard (center LEDs lit) until `release` or reflash.")
 
 
 def cmd_release(dev: Device, args, log=print):
+    need(dev, "release", log)
     dev.write("hold", 0)
     log("Released.")
 

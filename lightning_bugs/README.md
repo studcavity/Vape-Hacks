@@ -105,14 +105,31 @@ STOP freezes `millis()`, so a unit that has slept is **unsynced**: after chargin
 ```sh
 python3 host/lb_sync.py info
 # Sync block at 0x20000400: firmware 0.4.0 (build a13ccff2+dirty), wire format 4.0
-#   compatible with this lb_sync.py (speaks wire format 4.0)
+#   compatible with this lb_sync.py (reads it as wire format 4.0); model py32-bug
+#     clock_sync  ok (v1)
+#     temperature ok (v1)
+#     ...
+#     sync        ok
+#     resync      ok
 ```
 
 Every unit reports three things in the first eight words of its sync block, which never move or change meaning again: the **wire format** (`major.minor`), the **firmware version** (`LB_FW_*` in `firmware/lightning_bugs/lb_version.h`, bumped by hand), and a **build ID** (the first 8 hex digits of the git commit, plus `+dirty` if the tree had uncommitted changes). `tools/lb_flash.py build` stamps the build ID in with a compiler flag and then reads the header back out of the binary, so a build that cannot say what it is fails instead of flashing. A build made some other way (Arduino IDE) reports "build unknown".
 
 `info` works against any format, including ones this script cannot speak, and it recognises the older formats 1-3 (before version reporting) as "wire format N, firmware unknown" rather than "no sync block". `status`, `resync` and `sync` print the same line, every log entry records `fw`, `fw_build`, `fw_dirty` and `format`, and `report` lists the firmware versions in the log and warns when they are mixed.
 
-**Compatibility rule.** A different *major* is a different layout: the host refuses it and says which firmware and format the unit has and which it speaks. A higher *minor* only ever appends words at the end of the block (the block size word grows), so a script with the same major and a minor no higher than the unit's keeps working; a unit with an older minor is refused because it lacks fields. Reordering or reinterpreting any word needs a new major (and `FORMAT_MAJOR` in `lb_sync.py`, `LB_FORMAT_MAJOR` in `lb_sync.h`). Format 4 is the one breaking change that introduced this scheme: units still running formats 1-3 need reflashing once.
+**Compatibility.** Three independent facts describe a unit, and each answers a different question:
+
+| fact | answers | how it changes |
+| --- | --- | --- |
+| wire format `major.minor` | which words exist, and where | a minor only *appends* words (the block size word grows); a new major reorders or reinterprets and is unreadable to older scripts |
+| firmware version | what the words *mean* | a field recomputed in fw X keeps its name and position, so gate it on firmware, not format |
+| model | which hardware it is | a board that lacks or computes something differently |
+
+A script reads each unit with **that unit's own layout** (every format ever released is listed in `host/lb_catalog.py`), so an older minor is readable. Whether it is *usable* is decided per command, not globally: `host/lb_catalog.py` maps each command to the **features** it needs (`clock_sync`, `temperature`, `power`, ...), and each feature lists **variants**, newest first, each guarded by a requirement such as `Fields("temp_cdeg") & Firmware(min=(0, 6, 0)) & NotModel("no-sensor")` and carrying the decoder for that case. A command whose *required* features are missing is refused with every reason at once ("`sync` needs clock_sync (v1: wire format 4.0 has no seq)"); a missing *optional* feature (say power on an old unit) is noted and left out of the log record. A newer minor than the script knows is read as its known prefix; a different major, or formats 1-3, is refused with the unit's firmware and format and the script's. `info` prints, per unit, every feature (and which variant it gets) and every command (ok / ok without X / not supported, with reasons).
+
+Requirements also cover the *connection*: `Access("write")` is what `sync`, `resync` and `hold` need, so a future read-only link can fetch and decode blocks (`Catalog.unit_from_words` identifies a unit from the header, or the whole block, however it arrived) and gets a clear refusal for anything that writes.
+
+To record a change, edit `host/lb_catalog.py` only (its docstring has the recipe): a new minor is a `FormatSpec` plus the struct in `lb_sync.h`; changed semantics are a new, newer `Variant` (keep the old one for old firmware); a new model is a name in `identify_model` plus `OnModel`/`NotModel` where it differs. Format 4.0 has not been flashed to any unit yet, so it may still be amended; after that, only append. Units still running formats 1-3 (if any exist) need reflashing once. The code is in `host/lb_compat.py` (generic, no project data) and `host/lb_catalog.py` (the data).
 
 ## Build and flash wrapper
 

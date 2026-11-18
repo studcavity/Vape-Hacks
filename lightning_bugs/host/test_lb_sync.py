@@ -9,6 +9,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import lb_catalog
+import lb_compat
 import lb_sync as lb
 
 BLOCK_ADDR = 0x20000400
@@ -55,7 +57,7 @@ class FakeTarget:
         init[lb.W["period_us"]] = 500_000
         for i in range(4):
             init[lb.W[f"uid{i}"]] = int.from_bytes(uid[4 * i:4 * i + 4], "little")
-        init[lb.W["temp_cdeg"]] = lb.NO_TEMP & 0xFFFFFFFF
+        init[lb.W["temp_cdeg"]] = lb_catalog.NO_TEMP & 0xFFFFFFFF
         for i, v in enumerate(init):
             self.ram[BLOCK_ADDR + 4 * i] = v
 
@@ -320,19 +322,53 @@ class VersionTests(unittest.TestCase):
         self.assertIn("wire format 5.0", msg)
         self.assertIn("speaks 4.0", msg)
 
-    def test_older_minor_is_refused_newer_minor_is_accepted(self):
-        old = lb.FORMAT_MINOR
+    def test_newer_minor_than_known_is_read_as_its_known_prefix(self):
+        clock, tgt = self.target(fmt=(4, 3), extra_words=5)          # a minor this script has never heard of
+        dev = lb.Device(tgt, clock)
+        self.assertEqual(len(dev.read_block().words), lb.BLOCK_WORDS)
+        lb.cmd_sync(dev, sync_args(duration=60), log=lambda *a: None)
+
+    def test_older_minor_is_read_with_its_own_layout_and_judged_per_command(self):
+        """A unit on 4.0 talking to a script that knows 4.1 (which appends `extra`): commands that
+        do not need `extra` still work; the one that does is refused, naming the missing field."""
+        from lb_catalog import COMMANDS, FEATURES, FORMATS
+        from lb_compat import Catalog, CommandNeeds, Feature, Fields, Formats, Variant
+        specs = list(FORMATS.specs) + [lb_compat.FormatSpec(4, 1, adds=("extra",))]
+        cat = Catalog(Formats(specs), FEATURES + [Feature("extra", (Variant("v1", Fields("extra")),))],
+                      dict(COMMANDS, fancy=CommandNeeds(required=("extra",)),
+                           sync=CommandNeeds(required=("clock_sync", "writable"), optional=("extra",))))
+        old = lb.CATALOG
+        lb.CATALOG = cat
         try:
-            lb.FORMAT_MINOR = 2                          # pretend this script speaks 4.2
-            clock, tgt = self.target(fmt=(4, 1))
-            with self.assertRaises(lb.SyncError) as cm:
-                lb.Device(tgt, clock)
-            self.assertIn("lacks fields", str(cm.exception))
-            clock, tgt = self.target(fmt=(4, 3), extra_words=5)      # newer minor appends words
+            clock, tgt = self.target(fmt=(4, 0))
             dev = lb.Device(tgt, clock)
-            self.assertEqual(len(dev.read_block().words), lb.BLOCK_WORDS)
+            self.assertEqual(len(dev.read_block().words), lb.BLOCK_WORDS)         # its own, shorter layout
+            out = []
+            lb.cmd_sync(dev, sync_args(duration=60), log=out.append)               # optional `extra` missing: runs
+            self.assertTrue(any("cannot report extra" in line for line in out), out)
+            with self.assertRaises(lb.SyncError) as cm:
+                dev.require("fancy")
+            self.assertIn("wire format 4.0 has no extra", str(cm.exception))
+            self.assertIn("firmware 0.4.0", str(cm.exception))
         finally:
-            lb.FORMAT_MINOR = old
+            lb.CATALOG = old
+
+    def test_read_only_connection_can_report_but_not_sync(self):
+        clock, tgt = self.target()
+        dev = lb.Device(tgt, clock)
+        dev.unit = lb.CATALOG.unit_from_words(dev.read_block().words, access={"read"})
+        dev.require("status")
+        with self.assertRaises(lb.SyncError) as cm:
+            dev.require("sync")
+        self.assertIn("cannot write", str(cm.exception))
+
+    def test_info_lists_features_and_commands(self):
+        _, tgt = self.target()
+        out = []
+        lb.cmd_info(tgt, None, log=out.append)
+        text = "\n".join(out)
+        for word in ("temperature", "clock_sync", "resync", "model py32-bug"):
+            self.assertIn(word, text)
 
     def test_truncated_block_is_refused(self):
         clock, tgt = self.target()

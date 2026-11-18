@@ -40,10 +40,12 @@
  *     [6] build flags (bit0: built from a dirty tree)   [7] &uwTick
  *   so a host can always find a block and say what it is, even one it cannot
  *   talk to. Compatibility rule: a different MAJOR is a different layout. A
- *   higher MINOR only appends words at the end (the block size grows), so a
- *   host that speaks the same major and a minor no higher than the unit's
- *   still works. Anything else that changes order or meaning needs a new major.
- *   The layout must match BLOCK_FIELDS in host/lb_sync.py.
+ *   higher MINOR only appends words at the end (the block size grows); a host
+ *   reads each unit with that unit's own layout and decides per command whether
+ *   the fields, firmware version and model it has are enough (host/lb_catalog.py).
+ *   Changing what a word *means* is a firmware-version matter, recorded there as
+ *   a new variant; reordering a word needs a new major.
+ *   The layout must match FORMATS in host/lb_catalog.py.
  */
 #pragma once
 #include <Arduino.h>
