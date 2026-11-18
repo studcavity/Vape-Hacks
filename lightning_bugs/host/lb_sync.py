@@ -42,7 +42,7 @@ from pathlib import Path
 # ─── Block layout (must match LbSyncBlock in lb_sync.h) ──────────────────────
 MAGIC0 = 0x4C425359                      # 'LBSY'
 MAGIC1 = MAGIC0 ^ 0xFFFFFFFF
-VERSION = 2
+VERSION = 3
 RAM_BASE = 0x20000000
 RAM_SIZE = 8 * 1024
 
@@ -53,6 +53,7 @@ BLOCK_FIELDS = [
     "uid0", "uid1", "uid2", "uid3",
     "temp_cdeg", "temp_min_cdeg", "temp_max_cdeg", "temp_sum_cdeg", "temp_n",
     "temp_raw", "vref_raw", "stats_tick",
+    "batt_mv", "power_state", "wake_count",
 ]
 W = {name: i for i, name in enumerate(BLOCK_FIELDS)}
 BLOCK_WORDS = len(BLOCK_FIELDS)
@@ -411,8 +412,19 @@ def temp_text(t: dict | None) -> str:
 
 
 def vcc_mv(blk: Block) -> int | None:
-    v = blk.vref_raw
-    return round(1200 * 4095 / v) if v else None
+    """Battery voltage in mV as the firmware last measured it (VDD is the cell); None if never read."""
+    return blk.batt_mv or None
+
+
+def power_text(blk: Block) -> str:
+    mv = vcc_mv(blk)
+    s = f"{mv / 1000:.3f} V" if mv else "battery not read yet"
+    s += f"; USB input {'high' if blk.power_state & 2 else 'low'}"
+    if blk.power_state & 1:
+        s += "; LOW-BATTERY LATCHED (will sleep after its 60 s window)"
+    if blk.wake_count:
+        s += f"; woken from sleep {blk.wake_count}x since boot"
+    return s
 
 
 def visit_record(kind: str, prev: Block, fit: Fit, corr_ppb: int, long_slope: float | None,
@@ -429,6 +441,9 @@ def visit_record(kind: str, prev: Block, fit: Fit, corr_ppb: int, long_slope: fl
         "prev_corr_ppb": prev.corr_ppb if prev.synced else None,
         "applied_corr_ppb": corr_ppb,
         "vcc_mv": vcc_mv(prev),
+        "low_battery": bool(prev.power_state & 1),
+        "usb_input": bool(prev.power_state & 2),
+        "wake_count": prev.wake_count,
         "temp": prev.temperature(),
     }
     if elapsed_s is not None:
@@ -465,6 +480,9 @@ def cmd_resync(dev: Device, args, log=print) -> dict:
         return cmd_sync(dev, full, log)
 
     log(f"Previous state: {temp_text(prev.temperature())}")
+    log(f"Power: {power_text(prev)}")
+    if prev.power_state & 1:
+        log("  WARNING: battery is low; this unit will go to sleep. Charge it, then resync.")
     drift, sd, last = measure_offset(dev, prev, n=args.offset_samples)
     log(f"Drift since last sync: {drift:+.1f} ms (±{sd:.1f}); positive = device ahead")
 
@@ -510,6 +528,7 @@ def cmd_status(dev: Device, args, log=print) -> dict:
     blk = dev.read_block()
     log(f"Sync block at 0x{blk.addr:08x}, tick @ 0x{blk.tick_addr:08x}, hold={blk.hold}")
     log(f"Device {blk.short_uid}  (UID {blk.uid or 'not reported'}); {temp_text(blk.temperature())}")
+    log(f"Power: {power_text(blk)}")
     if not blk.synced:
         log("Not synced." + (f" (seq {blk.seq}, ack {blk.ack_seq})" if blk.seq else ""))
         return {"synced": False}
@@ -639,11 +658,50 @@ def drift_report(recs: list[dict]) -> dict:
         means = [d["rate_mean_ppm"] for d in devices.values()]
         if len(means) > 1:
             pooled["between_device_sd_ppm"] = statistics.stdev(means)
-    return {"devices": devices, "pooled": pooled, "skipped": len(recs) - len(vis)}
+    return {"devices": devices, "pooled": pooled, "skipped": len(recs) - len(vis),
+            "battery": battery_report(recs)}
+
+
+LOW_BATT_MV = 3600       # lb_power_policy.h LB_LOW_MV: where the firmware protects the cell
+
+
+def battery_report(recs: list[dict]) -> dict:
+    """Per device: supply voltage trend over the logged visits and a rough time to the sleep threshold.
+
+    The cell's voltage curve is flat through the middle of its charge, so a straight-line
+    projection from a few visits is optimistic early on and pessimistic near the end.
+    """
+    per = {}
+    for r in recs:
+        if r.get("uid") and r.get("vcc_mv") and r.get("wall_s") and not r.get("usb_input"):
+            per.setdefault(r["uid"], []).append((r["wall_s"], r["vcc_mv"], r.get("short_uid", "?")))
+    out = {}
+    for uid, pts in per.items():
+        pts.sort()
+        d = {"short_uid": pts[0][2], "visits": len(pts), "first_mv": pts[0][1], "last_mv": pts[-1][1],
+             "span_h": (pts[-1][0] - pts[0][0]) / 3600}
+        fit = ols([(t - pts[0][0]) / 86400 for t, _, _ in pts], [v for _, v, _ in pts]) if len(pts) >= 3 else None
+        if fit and d["span_h"] >= 1 and fit[0] < 0:
+            d["mv_per_day"] = fit[0]
+            d["days_to_sleep"] = max(0.0, (pts[-1][1] - LOW_BATT_MV) / -fit[0])
+        out[uid] = d
+    return out
+
+
+def print_battery(bat: dict, out=print) -> None:
+    for _, d in sorted(bat.items()):
+        line = (f"battery {d['short_uid']}: {d['last_mv'] / 1000:.3f} V now "
+                f"({d['first_mv'] / 1000:.3f} V {d['span_h']:.1f} h earlier, {d['visits']} visits)")
+        if "mv_per_day" in d:
+            line += f"; {d['mv_per_day']:+.0f} mV/day, about {d['days_to_sleep']:.0f} days to {LOW_BATT_MV / 1000:.2f} V"
+        out(line)
+    if bat:
+        out("")
 
 
 def print_report(rep: dict, out=print) -> None:
     p = rep["pooled"]
+    print_battery(rep.get("battery", {}), out)
     if not p["visits"]:
         out("No usable visits yet (need `resync` visits with a long baseline and a temperature reading).")
         if rep["skipped"]:

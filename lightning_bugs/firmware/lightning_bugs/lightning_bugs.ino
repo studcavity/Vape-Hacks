@@ -19,6 +19,14 @@
  * which units still need a sync. While idle the firmware also samples the die
  * temperature and keeps the chip UID in the sync block (see lb_sync.h).
  *
+ * Battery protection (lb_power_policy.h): the cell has no protection circuit, so
+ * once the supply stays at or below 3.60 V the unit stops showing, gives you a
+ * 60 s awake window (SWD reachable), then sleeps in STOP mode until the slide
+ * switch moves or USB power appears. Every wake opens another 60 s window and
+ * then, if the battery is still low, sleeps again, so accidental wakes cost
+ * about 7 uAh each. STOP freezes millis(), so a woken unit is unsynced and
+ * needs a new `lb_sync.py sync`. With USB power present the unit runs normally.
+ *
  * LED driver code is a trimmed copy of the stock firmware. Board: Generic
  * PY32F030 (py32duino). Flash with tools/lb_flash.py.
  */
@@ -85,6 +93,87 @@ static void ledsDark() {                  // blank the driver, then cut its powe
     ledPower(false);
 }
 
+// ─── Low-battery sleep ───────────────────────────────────────────────────────
+// Wake sources: PF0 rising (USB power appears) and PA2 any edge (slide switch).
+// The ISRs only set flags; they stay attached all the time so the toggle count
+// can spot a chattering switch (PA2 is analog-biased on this board, and mid-rail
+// may sit on the digital threshold).
+static volatile bool    wakeFlag = false;
+static volatile uint8_t switchToggles = 0;
+static void onUsbWake()    { wakeFlag = true; }
+static void onSwitchWake() { wakeFlag = true; if (switchToggles < 255) switchToggles++; }
+
+static void attachSwitchWake() { attachInterrupt(digitalPinToInterrupt(PA2), onSwitchWake, CHANGE); }
+
+// The ONLY place the firmware enters STOP. Returns after a wake. STOP stops the
+// HSI and SysTick; on exit the core runs from HSI again (reference manual 6.3.2).
+// If this misbehaves the unit cannot be reached over SWD until it wakes: this is
+// canary-first code (see assessments/swd-recovery.md).
+static void enterStopUntilWake() {
+    wakeFlag = false;
+    while (!wakeFlag) {
+        __disable_irq();
+        if (!wakeFlag) {
+            PWR->CR1 |= PWR_CR1_LPR;                              // lb-allow-swd-risk: low-power regulator in STOP
+            SCB->SCR |= SCB_SCR_SLEEPDEEP_Msk;                    // lb-allow-swd-risk: deep sleep
+            __WFI();
+            SCB->SCR &= ~SCB_SCR_SLEEPDEEP_Msk;                   // lb-allow-swd-risk: back to normal sleep
+        }
+        __enable_irq();                                           // a pending wake ISR runs here
+    }
+}
+
+static void sleepLowBattery() {
+    ledsDark();                                                   // driver blank and unpowered (PA15 high)
+    bool chatter = switchToggles >= LB_MAX_SWITCH_TOGGLES;
+    if (chatter) detachInterrupt(digitalPinToInterrupt(PA2));     // USB only until the next USB wake
+    switchToggles = 0;
+    enterStopUntilWake();
+    if (chatter) attachSwitchWake();
+    lbBlock.wake_count++;
+    lbBlock.ack_seq = 0;                                          // millis() stood still: the old sync is void
+    lbS.synced = false;
+    lbPowerWoke(&lbPower, millis());
+}
+
+// Three short centre-cluster flashes: "low battery, going back to sleep".
+static void lowBatteryBlink() {
+    ledPower(true);
+    for (int i = 0; i < 3; i++) {
+        clearFrame();
+        for (int c = 0; c < HALO_CENTER_COUNT; c++) frame[HALO_MAP[HALO_RING_COUNT + c]] = 0xFF;
+        sendFrame();
+        delay(100);
+        clearFrame();
+        sendFrame();
+        delay(150);
+    }
+    ledsDark();
+}
+
+// Stay awake, dark, with SWD reachable, until the window ends, USB appears, or the
+// battery recovers. Readings continue (lbTempService) so a charge ends it early.
+static void holdWindow() {
+    static bool announced = false;
+    if (!announced) { announced = true; lowBatteryBlink(); }
+    while (lbPowerAction(&lbPower, millis()) == LB_PWR_WINDOW) {
+        lbTempService(1000000);
+        __WFI();
+    }
+    announced = false;
+}
+
+// True if the power policy took over this pass (the caller should re-evaluate).
+static bool powerGate() {
+    switch (lbPowerAction(&lbPower, millis())) {
+        case LB_PWR_WINDOW: holdWindow();       return true;
+        case LB_PWR_SLEEP:  sleepLowBattery();  return true;
+        default:                                return false;
+    }
+}
+
+static bool powerOk() { return lbPowerAction(&lbPower, millis()) == LB_PWR_RUN; }
+
 // ─── Boot guard indicator: single halo LED spinning ──────────────────────────
 static void guardSpinner(uint32_t elapsedMs) {
     clearFrame();
@@ -109,7 +198,7 @@ static void renderCometFrame(uint32_t k) {
 // Play the show that started at master time startUs. Returns false, without
 // blanking, if the host writes a new sync mid-show (the loop then re-reads the grid).
 static uint32_t seqAtStart;
-static bool sameSync() { return lbS.seq == seqAtStart; }
+static bool sameSync() { return lbS.seq == seqAtStart && powerOk(); }
 
 static bool playShow(int64_t startUs) {
     seqAtStart = lbS.seq;
@@ -136,7 +225,7 @@ static void unsyncedBlink() {
     delay(100);
     ledsDark();
     uint32_t until = millis() + 1900;
-    while ((int32_t)(millis() - until) < 0 && !lbSynced()) {
+    while ((int32_t)(millis() - until) < 0 && !lbSynced() && powerOk()) {
         lbTempService(1000000);
         __WFI();
     }
@@ -147,6 +236,10 @@ void setup() {
     pinMode(PA9,  OUTPUT); digitalWrite(PA9,  LOW);
     pinMode(PA12, OUTPUT); digitalWrite(PA12, LOW);
     pinMode(PA15, OUTPUT); ledPower(true);               // LED driver power on for the guard indicator
+    pinMode(PF0, INPUT_PULLUP);                          // USB sense (as the stock firmware)
+    pinMode(PA2, INPUT);                                 // slide switch, used here only as a wake edge
+    attachInterrupt(digitalPinToInterrupt(PF0), onUsbWake, RISING);
+    attachSwitchWake();
 
     // Nothing that can disturb SWD (PA13/PA14 remap, STOP mode, clock
     // changes) may run before this returns.
@@ -156,9 +249,10 @@ void setup() {
 }
 
 static uint32_t waitSeq;
-static bool sameGridWait() { return lbS.seq == waitSeq; }
+static bool sameGridWait() { return lbS.seq == waitSeq && powerOk(); }
 
 void loop() {
+    if (powerGate()) return;                             // low battery: window, or sleep until woken
     if (!lbSynced()) { unsyncedBlink(); return; }
 
     int64_t now    = lbMasterUs();

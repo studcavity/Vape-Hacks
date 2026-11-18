@@ -264,6 +264,19 @@ class ResyncTests(unittest.TestCase):
         with self.assertRaises(lb.SyncError):
             self.quiet(dev, no_fallback=True)
 
+    def test_record_carries_battery_and_power_state(self):
+        clock, tgt, dev = self.make(0, seed=6)
+        lb.cmd_sync(dev, sync_args(duration=60), log=lambda *a: None)
+        for name, v in (("batt_mv", 3712), ("power_state", 1), ("wake_count", 3)):
+            tgt.ram[BLOCK_ADDR + 4 * lb.W[name]] = v
+        clock.sleep(1200)
+        out = []
+        rec = lb.cmd_resync(dev, resync_args(), log=out.append)
+        self.assertEqual((rec["vcc_mv"], rec["low_battery"], rec["usb_input"], rec["wake_count"]),
+                         (3712, True, False, 3))
+        self.assertTrue(any("LOW-BATTERY" in line for line in out))
+        self.assertTrue(any("3.712 V" in line for line in out))
+
     def test_new_grid_can_be_given(self):
         clock, tgt, dev = self.make(0, seed=4)
         lb.cmd_sync(dev, sync_args(duration=60, every=3600.0), log=lambda *a: None)
@@ -319,6 +332,23 @@ class LogAndReportTests(unittest.TestCase):
         out = []
         lb.print_report(rep, out.append)
         self.assertTrue(any("ppm/°C" in line for line in out))
+
+    def test_battery_trend_and_projection(self):
+        def rec(day, mv, usb=False):
+            return {"uid": "aa" * 16, "short_uid": "aa-bb", "wall_s": 1_000_000 + day * 86400,
+                    "vcc_mv": mv, "usb_input": usb}
+        recs = [rec(0, 4000), rec(1, 3980), rec(2, 3960), rec(3, 3940), rec(2.5, 4150, usb=True)]
+        bat = lb.battery_report(recs)["aa" * 16]
+        self.assertEqual(bat["visits"], 4)                  # the visit on a charger is not a discharge point
+        self.assertAlmostEqual(bat["mv_per_day"], -20.0, places=6)
+        self.assertAlmostEqual(bat["days_to_sleep"], (3940 - 3600) / 20, places=6)
+        out = []
+        lb.print_report(lb.drift_report(recs), out.append)
+        self.assertTrue(any("mV/day" in line and "aa-bb" in line for line in out))
+
+    def test_battery_needs_a_trend(self):
+        recs = [{"uid": "aa" * 16, "wall_s": 1000 + i, "vcc_mv": 3900} for i in range(3)]   # all within a minute
+        self.assertNotIn("days_to_sleep", lb.battery_report(recs)["aa" * 16])
 
     def test_report_skips_unusable_visits(self):
         recs = [self.visit("aa" * 16, 10.0, 25.0, source="short"),
