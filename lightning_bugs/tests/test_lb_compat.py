@@ -6,7 +6,18 @@ import pytest
 
 import lb_catalog
 from lb_compat import (Access, AnyOf, Catalog, CommandNeeds, Feature, Fields, Firmware, FormatSpec, Formats,
-                       NotModel, OnModel, Unit, Unsupported, Variant, describe_header, parse_header)
+                       HasTrait, Model, NotModel, OnModel, Trait, Transport, Unit, Unsupported, Variant,
+                       describe_header, parse_header)
+
+
+CORE = Trait("core", capabilities=("sync",), transports=("swd",))
+TEMP = Trait("temp", capabilities=("temperature",))
+CAL_B = Trait("temp-cal-b")                                   # marker: converts the reading differently
+HUM = Trait("hum", capabilities=("humidity",))
+RADIO = Trait("radio", transports=("radio",))
+BASIC = Model(0, "basic", (CORE, TEMP))
+DELUXE = BASIC.derive(1, "deluxe", add=(HUM, RADIO, CAL_B))
+SENSORLESS = BASIC.derive(2, "no-sensor", drop=("temp",))
 
 
 def make_catalog():
@@ -18,19 +29,18 @@ def make_catalog():
         FormatSpec(4, 2, adds=("temp2", "hum")),
     ])
     temp = Feature("temperature", (
-        Variant("v2", Fields("temp2") & Firmware(min=(0, 6, 0)) & NotModel("no-sensor"), "dec2"),
-        Variant("v1", Fields("temp") & Firmware(min=(0, 4, 0), below=(0, 6, 0)) & NotModel("no-sensor"), "dec1"),
+        Variant("v2b", Fields("temp2") & HasTrait("temp-cal-b"), "dec2b"),
+        Variant("v2", Fields("temp2") & Firmware(min=(0, 6, 0)), "dec2"),
+        Variant("v1", Fields("temp") & Firmware(min=(0, 4, 0), below=(0, 6, 0)), "dec1"),
     ))
-    humidity = Feature("humidity", (Variant("v1", Fields("hum") & OnModel("deluxe")),))
+    humidity = Feature("humidity", (Variant("v1", Fields("hum")),))
     sync = Feature("sync", (Variant("v1", Fields("seq")),))
-    writable = Feature("writable", (Variant("v1", Access("write")),))
-
-    def identify(layout, read):
-        return {1: "deluxe", 2: "no-sensor"}.get(read("model_id"), "basic")
+    writable = Feature("writable", (Variant("v1", Access("write")),), hardware=False)
     cmds = {"stats": CommandNeeds(required=("sync",), optional=("temperature", "humidity")),
             "push": CommandNeeds(required=("sync", "writable")),
             "climate": CommandNeeds(required=("temperature", "humidity"))}
-    return Catalog(formats, [temp, humidity, sync, writable], cmds, identify)
+    transports = [Transport("swd", ("read", "write")), Transport("radio", ("read",))]
+    return Catalog(formats, [temp, humidity, sync, writable], cmds, [BASIC, DELUXE, SENSORLESS], transports)
 
 
 def words(cat, major=4, minor=0, fw=(0, 4, 0), n=None, **fields):
@@ -74,7 +84,7 @@ def test_firmware_picks_the_variant(fw, minor, expect):
     st = cat.status(cat.unit_from_words(words(cat, minor=minor, fw=fw)), "temperature")
     assert st.variant == expect
     if expect is None:
-        assert len(st.reasons) == 2 and all(r.startswith("v") for r in st.reasons)
+        assert len(st.reasons) == 3 and all(r.startswith("v") for r in st.reasons)
 
 
 def test_impl_is_returned_with_the_variant():
@@ -84,20 +94,65 @@ def test_impl_is_returned_with_the_variant():
 
 
 # ── models ───────────────────────────────────────────────────────────────────
-def test_model_is_read_from_the_block_and_gates_variants():
-    cat = make_catalog()
-    basic = cat.unit_from_words(words(cat, minor=2, fw=(0, 6, 0), model_id=0))
-    sensorless = cat.unit_from_words(words(cat, minor=2, fw=(0, 6, 0), model_id=2))
-    deluxe = cat.unit_from_words(words(cat, minor=2, fw=(0, 6, 0), model_id=1))
-    assert [u.model for u in (basic, sensorless, deluxe)] == ["basic", "no-sensor", "deluxe"]
-    assert cat.supports(basic, "temperature") and not cat.supports(sensorless, "temperature")
-    assert cat.supports(deluxe, "humidity") and not cat.supports(basic, "humidity")
-    assert "model 'basic' is not 'deluxe'" in cat.status(basic, "humidity").reasons[0]
+def test_models_compose_from_traits():
+    assert BASIC.capabilities == {"sync", "temperature"} and BASIC.transports == {"swd"}
+    assert DELUXE.capabilities == {"sync", "temperature", "humidity"} and DELUXE.transports == {"swd", "radio"}
+    assert SENSORLESS.capabilities == {"sync"} and SENSORLESS.has_trait("core") and not SENSORLESS.has_trait("temp")
+    assert BASIC.capabilities == {"sync", "temperature"}                  # deriving never mutates the base
 
 
-def test_unit_without_a_model_word_gets_the_default_identification():
+def test_model_is_read_from_the_block_and_gates_features():
     cat = make_catalog()
-    assert cat.unit_from_words(words(cat, minor=0)).model == "basic"      # 4.0 has no model_id
+    u = {m.name: cat.unit_from_words(words(cat, minor=2, fw=(0, 6, 0), model_id=m.id)) for m in (BASIC, DELUXE, SENSORLESS)}
+    assert {k: v.model for k, v in u.items()} == {"basic": BASIC, "deluxe": DELUXE, "no-sensor": SENSORLESS}
+    assert cat.supports(u["basic"], "temperature") and not cat.supports(u["no-sensor"], "temperature")
+    assert cat.status(u["no-sensor"], "temperature").reasons == ["model 'no-sensor' has no temperature"]
+    assert cat.supports(u["deluxe"], "humidity") and not cat.supports(u["basic"], "humidity")
+
+
+def test_a_trait_selects_the_variant_for_boards_that_compute_differently():
+    cat = make_catalog()
+    basic = cat.unit_from_words(words(cat, minor=2, fw=(0, 7, 0), model_id=0))
+    deluxe = cat.unit_from_words(words(cat, minor=2, fw=(0, 4, 0), model_id=1))   # old fw, but cal-b board
+    assert cat.variant(basic, "temperature").impl == "dec2"
+    assert cat.variant(deluxe, "temperature").impl == "dec2b"                    # trait, not fw, decides
+
+
+def test_unknown_model_id_is_refused_clearly_not_guessed():
+    cat = make_catalog()
+    u = cat.unit_from_words(words(cat, minor=2, fw=(0, 6, 0), model_id=77))
+    assert u.model.name == "unknown(id 77)"
+    assert not cat.supports(u, "sync")
+    with pytest.raises(Unsupported, match="cannot be reached over swd"):
+        cat.check_command(u, "stats")
+
+
+def test_format_without_a_model_word_means_the_default_model_but_a_bare_header_cannot_say():
+    cat = make_catalog()
+    assert cat.unit_from_words(words(cat, minor=0)).model == BASIC          # 4.0 predates model_id
+    assert cat.unit_from_words(words(cat, minor=2)[:8]).model.name == "undetermined"
+
+
+def test_catalog_validates_models_and_transports():
+    f = Formats([FormatSpec(4, 0, adds=("a",))])
+    with pytest.raises(ValueError, match="share an id"):
+        Catalog(f, [], {}, [Model(0, "a"), Model(0, "b")], [])
+    with pytest.raises(ValueError, match="unknown transport"):
+        Catalog(f, [], {}, [Model(0, "a", (Trait("t", transports=("nope",)),))], [Transport("swd")])
+    with pytest.raises(ValueError, match="default model"):
+        Catalog(f, [], {}, [Model(1, "a")], [], default_model=0)
+
+
+def test_unit_must_be_reached_over_a_transport_its_model_has():
+    cat = make_catalog()
+    w = words(cat, minor=2, fw=(0, 6, 0), model_id=0)
+    cat.check_command(cat.unit_from_words(w, transport="swd"), "stats")
+    with pytest.raises(Unsupported, match="basic' cannot be reached over radio"):
+        cat.check_command(cat.unit_from_words(w, transport="radio"), "stats")
+    deluxe = words(cat, minor=2, fw=(0, 6, 0), model_id=1)
+    cat.check_command(cat.unit_from_words(deluxe, transport="radio"), "stats")      # deluxe has a radio
+    with pytest.raises(Unsupported, match="cannot write"):                          # ...which cannot write
+        cat.check_command(cat.unit_from_words(deluxe, transport="radio"), "push")
 
 
 # ── commands ─────────────────────────────────────────────────────────────────
@@ -121,8 +176,9 @@ def test_optional_features_degrade_instead_of_refusing():
 def test_access_gates_commands_independent_of_the_unit():
     cat = make_catalog()
     w = words(cat, minor=2, fw=(0, 6, 0))
-    ro = cat.unit_from_words(w, access={"read"})
-    rw = cat.unit_from_words(w, access={"read", "write"})
+    ro = cat.unit_from_words(w, transport="swd")
+    ro = Unit(ro.major, ro.minor, ro.fw, ro.layout, ro.model, "swd", frozenset({"read"}))   # a read-only swd
+    rw = cat.unit_from_words(w, transport="swd")
     cat.check_command(ro, "stats")                                     # reading needs no write
     with pytest.raises(Unsupported, match="cannot write"):
         cat.check_command(ro, "push")
@@ -153,10 +209,10 @@ def test_catalog_rejects_commands_naming_unknown_features():
 def test_requirements_compose_and_describe_themselves():
     r = Fields("a") & Firmware(min=(0, 6, 0)) & NotModel("x")
     assert r.describe() == "fields a and firmware >= 0.6.0 and not model x"
-    u = Unit(4, 0, (0, 5, 0), None, "x")
+    u = Unit(4, 0, (0, 5, 0), None, Model(5, "x"))
     assert len(r.unmet(u)) == 3
     any_ = AnyOf(OnModel("a"), OnModel("b"))
-    assert any_.ok(Unit(4, 0, None, None, "b")) and not any_.ok(Unit(4, 0, None, None, "c"))
+    assert any_.ok(Unit(4, 0, None, None, Model(5, "b"))) and not any_.ok(Unit(4, 0, None, None, Model(5, "c")))
     assert (OnModel("a") | OnModel("b") | OnModel("c")).describe() == "(model a or model b or model c)"
 
 
@@ -184,6 +240,6 @@ def test_real_catalog_supports_every_command_on_current_firmware_over_swd():
     layout = cat.formats.layout(4, 0)
     w = [0] * layout.words
     w[2], w[3], w[4] = 4 << 16, layout.words, 4 << 8
-    u = cat.unit_from_words(w, access={"read", "write"})
+    u = cat.unit_from_words(w, transport="swd")
     for name in cat.commands:
         assert cat.check_command(u, name) == []

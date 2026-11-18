@@ -105,6 +105,8 @@ struct LbSyncBlock {
     volatile uint32_t batt_mv;         // [30] latest supply/battery voltage in mV, 0 = never read
     volatile uint32_t power_state;     // [31] bit0 = low-battery latched, bit1 = USB present
     volatile uint32_t wake_count;      // [32] stop-mode wakes since boot
+    // ── board model (the host maps this id to what the board can do; see host/lb_catalog.py) ──
+    uint32_t model_id;                 // [33] LB_MODEL_ID
 };
 #define LB_BLOCK_WORDS (sizeof(LbSyncBlock) / 4)
 
@@ -114,7 +116,8 @@ __attribute__((used, aligned(4))) static LbSyncBlock lbBlock = {
     0, 0, 0, 0, 0, 0, 0, 0, 0, LB_DEFAULT_PERIOD_US,
     0, 0, 0, 0,
     LB_NO_TEMP, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0
+    0, 0, 0,
+    LB_MODEL_ID
 };
 
 // Firmware-side snapshot, refreshed from lbBlock whenever seq changes.

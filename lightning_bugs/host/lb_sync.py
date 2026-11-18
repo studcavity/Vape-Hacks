@@ -96,10 +96,11 @@ class Block:
     It knows nothing about how the words arrived (SWD, a log, another link)."""
     addr: int
     words: list
+    transport: str = "swd"          # how these words were obtained; decides what a command may do with them
 
     @cached_property
     def unit(self) -> Unit:
-        return CATALOG.unit_from_words(self.words, access={"read"})
+        return CATALOG.unit_from_words(self.words, transport=self.transport)
 
     def __getattr__(self, name):
         if name == "words":
@@ -235,8 +236,7 @@ class Device:
         self.addr = self.header.addr
         self.tick_addr = self.header.tick_addr
         self.layout = CATALOG.formats.layout(self.header.major, self.header.minor)
-        self.access = frozenset({"read", "write"})             # SWD can do both
-        self.unit = CATALOG.unit_from_words(self.read_block().words, self.access)
+        self.unit = CATALOG.unit_from_words(self.read_block().words, transport="swd")
         self.degraded: list = []
 
     def require(self, command: str) -> list:
@@ -501,7 +501,7 @@ def visit_record(kind: str, prev: Block, fit: Fit, corr_ppb: int, long_slope: fl
         "fw_build": f"{prev.fw_build:08x}" if prev.fw_build else "",
         "fw_dirty": bool(prev.fw_flags & 1),
         "format": f"{prev.unit.major}.{prev.unit.minor}",
-        "model": prev.unit.model,
+        "model": prev.unit.model.name,
         "prev_synced": prev.synced,
         "rate_source": "long" if long_slope is not None else "short",
         "raw_rate_ppm": round((rate_slope / 1000.0 - 1.0) * 1e6, 3),   # device clock error, + = fast
@@ -604,7 +604,8 @@ def cmd_info(target, args, log=print) -> None:
         except SyncError:
             log(f"  NOT compatible with this lb_sync.py (speaks wire format {SPEAKS}): reflash the unit")
             continue
-        unit = CATALOG.unit(h.major, h.minor, h.fw, access={"read", "write"})   # as over SWD
+        layout = CATALOG.formats.layout(h.major, h.minor)
+        unit = CATALOG.unit_from_words(list(target.read_memory_block32(h.addr, layout.words)), transport="swd")
         log(f"  compatible with this lb_sync.py (reads it as wire format {h.major}.{min(h.minor, FORMAT_MINOR)}); model {unit.model}")
         for st in CATALOG.report(unit):
             log(f"    {st.feature:<12}" + (f"ok ({st.variant})" if st.ok else "NO: " + "; ".join(st.reasons)))

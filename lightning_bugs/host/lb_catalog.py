@@ -6,8 +6,11 @@ To record a change, add to this file only:
   * a new wire-format minor that appends words      -> a FormatSpec in FORMATS (+ the struct in lb_sync.h)
   * a field whose meaning changed in firmware X.Y.Z -> a new, newer Variant on the feature that reads it
     (keep the old variant: units still running older firmware need it)
-  * a new hardware model                            -> a name in MODELS, and Variants / NotModel
-                                                       requirements where it differs
+  * a new hardware model                            -> a Model in MODELS built from Traits; a marker
+                                                       Trait + a Variant requiring HasTrait(...) only
+                                                       where it computes something differently
+  * a new way of reaching units                     -> a Transport in TRANSPORTS (and the traits of
+                                                       the models reachable over it)
   * a command that needs something new              -> its entry in COMMANDS
 
 Nothing is released yet (no unit has been flashed), so format 4.0 may still be amended; once a
@@ -18,7 +21,8 @@ the same decoding works on a block that arrived by any transport.
 """
 from __future__ import annotations
 
-from lb_compat import Access, Catalog, CommandNeeds, Feature, Fields, Firmware, FormatSpec, Formats, Variant
+from lb_compat import (Access, Catalog, CommandNeeds, Feature, Fields, Firmware, FormatSpec, Formats, Model,
+                       Trait, Transport, Variant)
 
 U32 = 1 << 32
 NO_TEMP = -(1 << 31)                     # LB_NO_TEMP in lb_sync.h
@@ -37,7 +41,7 @@ FORMATS = Formats([
     FormatSpec(1, 0, legacy=True, note="before version reporting"),
     FormatSpec(2, 0, legacy=True, note="before version reporting"),
     FormatSpec(3, 0, legacy=True, note="before version reporting"),
-    FormatSpec(4, 0, note="fixed 8-word header, sync, identity, temperature, battery", adds=HEADER_FIELDS + (
+    FormatSpec(4, 0, note="fixed 8-word header, sync, identity, temperature, battery, model id", adds=HEADER_FIELDS + (
         "seq", "ack_seq", "hold",
         "anchor_tick", "anchor_us_lo", "anchor_us_hi", "corr_ppb",
         "epoch_us_lo", "epoch_us_hi", "period_us",
@@ -45,6 +49,7 @@ FORMATS = Formats([
         "temp_cdeg", "temp_min_cdeg", "temp_max_cdeg", "temp_sum_cdeg", "temp_n",
         "temp_raw", "vref_raw", "stats_tick",
         "batt_mv", "power_state", "wake_count",
+        "model_id",
     )),
     # Next minor goes here, e.g.:  FormatSpec(4, 1, adds=("model_id",), note="board model word"),
 ])
@@ -95,7 +100,7 @@ FEATURES = [
 ]
 
 FEATURES.append(Feature("writable", doc="the connection can write to the unit (SWD can; a read-only link cannot)",
-                        variants=(Variant("v1", Access("write")),)))
+                        variants=(Variant("v1", Access("write")),), hardware=False))
 
 # ─── Commands ────────────────────────────────────────────────────────────────
 # `Access` is about the connection (can we write?), the rest about the unit. `optional` features
@@ -110,14 +115,29 @@ COMMANDS = {
 }
 
 
+# ─── Transports ──────────────────────────────────────────────────────────────
+# Add one per way of reaching a unit; `access` is what it allows. A model lists the transports it
+# can be reached over (via traits), so a board without, say, a radio is refused a radio link.
+TRANSPORTS = [
+    Transport("swd", access=("read", "write")),
+]
+
 # ─── Models ──────────────────────────────────────────────────────────────────
-DEFAULT_MODEL = "py32-bug"
+# A model is an id (what the firmware reports in `model_id`, set with -DLB_MODEL_ID) plus traits.
+# A trait is what the hardware can provide (feature names) and the transports that reach it.
+CORE = Trait("core", capabilities=("clock_sync", "hold", "identity"), transports=("swd",))
+DIE_TEMP = Trait("die-temp", capabilities=("temperature",))
+BATTERY_SENSE = Trait("battery-sense", capabilities=("power",))
 
+BUG = Model(0, "py32-bug", (CORE, DIE_TEMP, BATTERY_SENSE))
+MODELS = [
+    BUG,
+    # A new board is one line, composed from what it shares with the others, e.g.
+    #   BUG.derive(1, "py32-bug-lite", drop=("die-temp",)),                 # same, but no temperature
+    #   BUG.derive(2, "py32-bug-radio", add=(Trait("radio", transports=("radio",)),)),   # + a radio link
+    # A board that converts a reading differently gets a marker trait (Trait("temp-cal-b")) and the
+    # feature gets a Variant requiring HasTrait("temp-cal-b") with its own decoder.
+]
+DEFAULT_MODEL = BUG.id             # what a format without a model word (or a model id of 0) means
 
-def identify_model(layout, read_field) -> str:
-    """Only one board exists. When a second does, append a model word in a format minor, read it
-    here with read_field("model_id"), and map ids to names; nothing else needs to change."""
-    return DEFAULT_MODEL
-
-
-CATALOG = Catalog(FORMATS, FEATURES, COMMANDS, identify_model)
+CATALOG = Catalog(FORMATS, FEATURES, COMMANDS, MODELS, TRANSPORTS, default_model=DEFAULT_MODEL)

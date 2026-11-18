@@ -331,12 +331,13 @@ class VersionTests(unittest.TestCase):
     def test_older_minor_is_read_with_its_own_layout_and_judged_per_command(self):
         """A unit on 4.0 talking to a script that knows 4.1 (which appends `extra`): commands that
         do not need `extra` still work; the one that does is refused, naming the missing field."""
-        from lb_catalog import COMMANDS, FEATURES, FORMATS
+        from lb_catalog import COMMANDS, FEATURES, FORMATS, MODELS, TRANSPORTS
         from lb_compat import Catalog, CommandNeeds, Feature, Fields, Formats, Variant
         specs = list(FORMATS.specs) + [lb_compat.FormatSpec(4, 1, adds=("extra",))]
-        cat = Catalog(Formats(specs), FEATURES + [Feature("extra", (Variant("v1", Fields("extra")),))],
+        cat = Catalog(Formats(specs), FEATURES + [Feature("extra", (Variant("v1", Fields("extra")),), hardware=False)],
                       dict(COMMANDS, fancy=CommandNeeds(required=("extra",)),
-                           sync=CommandNeeds(required=("clock_sync", "writable"), optional=("extra",))))
+                           sync=CommandNeeds(required=("clock_sync", "writable"), optional=("extra",))),
+                      MODELS, TRANSPORTS)
         old = lb.CATALOG
         lb.CATALOG = cat
         try:
@@ -356,11 +357,28 @@ class VersionTests(unittest.TestCase):
     def test_read_only_connection_can_report_but_not_sync(self):
         clock, tgt = self.target()
         dev = lb.Device(tgt, clock)
-        dev.unit = lb.CATALOG.unit_from_words(dev.read_block().words, access={"read"})
+        u = dev.unit                                     # the same unit reached over a link that cannot write
+        dev.unit = lb_compat.Unit(u.major, u.minor, u.fw, u.layout, u.model, "swd", frozenset({"read"}))
         dev.require("status")
         with self.assertRaises(lb.SyncError) as cm:
             dev.require("sync")
         self.assertIn("cannot write", str(cm.exception))
+
+    def test_model_word_is_reported_and_logged(self):
+        clock, tgt = self.target()
+        dev = lb.Device(tgt, clock)
+        self.assertEqual(dev.unit.model.name, "py32-bug")
+        self.assertEqual(dev.read_block().model_id, 0)
+        rec = lb.cmd_sync(dev, sync_args(duration=60), log=lambda *a: None)
+        self.assertEqual(rec["model"], "py32-bug")
+
+    def test_unknown_model_is_refused_with_its_id(self):
+        clock, tgt = self.target()
+        tgt.ram[BLOCK_ADDR + 4 * lb.W["model_id"]] = 9
+        dev = lb.Device(tgt, clock)                      # still readable: `info` and friends work
+        with self.assertRaises(lb.SyncError) as cm:
+            dev.require("sync")
+        self.assertIn("unknown(id 9)", str(cm.exception))
 
     def test_info_lists_features_and_commands(self):
         _, tgt = self.target()

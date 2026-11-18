@@ -165,6 +165,60 @@ class Formats:
         return out
 
 
+# ─── Models and transports ───────────────────────────────────────────────────
+@dataclass(frozen=True)
+class Trait:
+    """A reusable piece of what hardware can do. Models are built by listing traits, so "has a die
+    temperature sensor" is written once and shared. A trait may also be a pure marker that variants
+    test for ("temp-cal-b": this board converts its temperature reading differently)."""
+    name: str
+    capabilities: frozenset = frozenset()     # feature names the hardware can provide
+    transports: frozenset = frozenset()       # ways of reaching a unit with this trait
+
+    def __init__(self, name: str, capabilities=(), transports=()):
+        object.__setattr__(self, "name", name)
+        object.__setattr__(self, "capabilities", frozenset(capabilities))
+        object.__setattr__(self, "transports", frozenset(transports))
+
+
+@dataclass(frozen=True)
+class Model:
+    """A board, identified by the id its firmware reports. Everything else about it is data here."""
+    id: int
+    name: str
+    traits: tuple = ()
+
+    @property
+    def capabilities(self) -> frozenset:
+        return frozenset().union(*(t.capabilities for t in self.traits))
+
+    @property
+    def transports(self) -> frozenset:
+        return frozenset().union(*(t.transports for t in self.traits))
+
+    def has_trait(self, name: str) -> bool:
+        return any(t.name == name for t in self.traits)
+
+    def derive(self, id: int, name: str, add=(), drop=()) -> "Model":
+        """A variant of this model: same traits, plus `add`, minus the traits named in `drop`."""
+        keep = tuple(t for t in self.traits if t.name not in drop)
+        return Model(id, name, keep + tuple(t for t in add if t not in keep))
+
+    def __str__(self) -> str:
+        return self.name
+
+
+@dataclass(frozen=True)
+class Transport:
+    """A way of talking to a unit, and what it allows ("read", "write")."""
+    name: str
+    access: frozenset
+
+    def __init__(self, name: str, access=()):
+        object.__setattr__(self, "name", name)
+        object.__setattr__(self, "access", frozenset(access))
+
+
 # ─── The unit being asked ────────────────────────────────────────────────────
 @dataclass(frozen=True)
 class Unit:
@@ -173,8 +227,9 @@ class Unit:
     minor: int
     fw: Version | None
     layout: Layout | None          # None: a format we cannot read
-    model: str = "unknown"
-    access: frozenset = frozenset({"read"})   # what the transport can do: "read", "write" (SWD has both)
+    model: Model = Model(-1, "undetermined")
+    transport: str | None = None   # how we reached it (a Transport name)
+    access: frozenset = frozenset({"read"})   # what that transport allows: "read", "write"
 
     def has(self, name: str) -> bool:
         return self.layout is not None and name in self.layout
@@ -259,7 +314,7 @@ class OnModel(Requirement):
         object.__setattr__(self, "names", tuple(names))
 
     def unmet(self, unit):
-        return [] if unit.model in self.names else [f"model {unit.model!r} is not {' or '.join(map(repr, self.names))}"]
+        return [] if unit.model.name in self.names else [f"model {unit.model.name!r} is not {' or '.join(map(repr, self.names))}"]
 
     def describe(self):
         return "model " + " or ".join(self.names)
@@ -273,10 +328,23 @@ class NotModel(Requirement):
         object.__setattr__(self, "names", tuple(names))
 
     def unmet(self, unit):
-        return [f"not available on model {unit.model!r}"] if unit.model in self.names else []
+        return [f"not available on model {unit.model.name!r}"] if unit.model.name in self.names else []
 
     def describe(self):
         return "not model " + " or ".join(self.names)
+
+
+@dataclass(frozen=True, repr=False)
+class HasTrait(Requirement):
+    """The unit's model carries this trait (preferred over naming models: a new board that shares
+    the trait is picked up automatically)."""
+    name: str
+
+    def unmet(self, unit):
+        return [] if unit.model.has_trait(self.name) else [f"model {unit.model.name!r} lacks trait {self.name!r}"]
+
+    def describe(self):
+        return f"trait {self.name}"
 
 
 @dataclass(frozen=True, repr=False)
@@ -347,6 +415,8 @@ class Feature:
     name: str
     variants: tuple
     doc: str = ""
+    hardware: bool = True      # the unit's model must list it among its capabilities; False for
+                               # things about the connection or format rather than the board
 
 
 @dataclass(frozen=True)
@@ -369,40 +439,74 @@ class FeatureStatus:
 
 
 class Catalog:
-    """Formats + features + commands (+ how to tell models apart), and the questions to ask them."""
+    """Formats + features + commands + models + transports, and the questions to ask them."""
 
     def __init__(self, formats: Formats, features: list[Feature], commands: dict[str, CommandNeeds],
-                 identify_model: Callable[[Layout | None, Callable[[str], int | None]], str] | None = None):
+                 models: list[Model] = (), transports: list[Transport] = (), default_model: int = 0,
+                 model_field: str = "model_id"):
         self.formats = formats
         self.features = {f.name: f for f in features}
         self.commands = commands
-        self._identify = identify_model
+        self.models = {m.id: m for m in models}
+        if len(self.models) != len(list(models)):
+            raise ValueError("two models share an id")
+        self.transports = {t.name: t for t in transports}
+        self.default_model = default_model
+        self.model_field = model_field
+        if self.models and default_model not in self.models:
+            raise ValueError(f"default model id {default_model} is not a listed model")
+        for m in models:
+            for t in m.transports:
+                if t not in self.transports:
+                    raise ValueError(f"model {m.name!r} uses unknown transport {t!r}")
         for c, needs in commands.items():
             for n in needs.required + needs.optional:
                 if n not in self.features:
                     raise ValueError(f"command {c!r} needs unknown feature {n!r}")
 
+    def model_for(self, layout: Layout | None, read_field: Callable[[str], int | None]) -> Model:
+        """The model a unit reports. A format without the model word is the default model; a block
+        we only have the header of cannot say; an id we have never heard of is its own, empty model
+        (so commands are refused with a clear reason rather than guessing what the board can do)."""
+        if not self.models:
+            return Model(-1, "unknown")
+        if layout is None or self.model_field not in layout:
+            return self.models[self.default_model]
+        mid = read_field(self.model_field)
+        if mid is None:
+            return Model(-1, "undetermined")
+        return self.models.get(mid) or Model(mid, f"unknown(id {mid})")
+
     def unit(self, major: int, minor: int, fw: Version | None,
              read_field: Callable[[str], int | None] = lambda n: None,
-             access: frozenset | set = frozenset({"read"})) -> Unit:
+             transport: str = "swd") -> Unit:
+        if transport not in self.transports and self.transports:
+            raise ValueError(f"unknown transport {transport!r}")
+        t = self.transports.get(transport)
         layout = self.formats.layout(major, minor)
-        model = self._identify(layout, read_field) if self._identify else "unknown"
-        return Unit(major, minor, fw, layout, model, frozenset(access))
+        return Unit(major, minor, fw, layout, self.model_for(layout, read_field), transport,
+                    t.access if t else frozenset({"read"}))
 
-    def unit_from_words(self, words, access: frozenset | set = frozenset({"read"})) -> Unit:
+    def unit_from_words(self, words, transport: str = "swd") -> Unit:
         """Identify a unit from a block of words obtained any way at all (SWD, a log, a radio packet).
-        `words` may be just the header, or the whole block (model detection reads the later fields)."""
+        `words` may be just the header, or the whole block (the model word and any later field are
+        only available from the whole block)."""
         h = parse_header(words)
         if h.legacy:
-            return Unit(h.major, 0, None, None, "unknown", frozenset(access))
+            return Unit(h.major, 0, None, None, Model(-1, "unknown"), transport,
+                        self.transports[transport].access if transport in self.transports else frozenset())
         layout = self.formats.layout(h.major, h.minor)
 
         def read_field(name):
             return words[layout.index[name]] if layout and name in layout and layout.index[name] < len(words) else None
-        return self.unit(h.major, h.minor, h.fw, read_field, access)
+        return self.unit(h.major, h.minor, h.fw, read_field, transport)
 
     def status(self, unit: Unit, feature: str) -> FeatureStatus:
         f = self.features[feature]
+        if unit.layout is None:
+            return FeatureStatus(feature, None, [f"wire format {unit.major}.{unit.minor} cannot be read by this script"])
+        if f.hardware and self.models and feature not in unit.model.capabilities:
+            return FeatureStatus(feature, None, [f"model {unit.model.name!r} has no {feature}"])
         why = []
         for v in f.variants:
             r = v.requires.unmet(unit)
@@ -422,6 +526,10 @@ class Catalog:
         """Statuses of the command's optional features; raises Unsupported listing every required
         feature that is missing (not just the first)."""
         needs = self.commands[command]
+        if unit.transport and self.models and unit.transport not in unit.model.transports:
+            raise Unsupported(f"`{command}`: model {unit.model.name!r} cannot be reached over {unit.transport}",
+                              [f"model {unit.model.name!r} is reached over: "
+                               + (", ".join(sorted(unit.model.transports)) or "nothing known")])
         missing = [s for s in (self.status(unit, n) for n in needs.required) if not s.ok]
         if missing:
             lines = [f"{s.feature} ({'; '.join(s.reasons)})" for s in missing]
