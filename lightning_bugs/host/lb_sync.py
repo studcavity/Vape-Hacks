@@ -12,6 +12,11 @@ Commands
   sync                     measure clock rate (default 10 min) and write the sync
   sync --refine            re-sync using the time since the last sync as a long
                            baseline for the rate (best accuracy; see README)
+  resync                   quick (~15 s) re-sync for a device you plug in every
+                           hour or so: the previous anchor is the baseline, the
+                           grid is kept, and the visit is logged with the
+                           device UID and its temperature (see README)
+  report                   per-device and all-device drift statistics from the log
   status                   report how far the device has drifted from this host
   hold [--reset|--wait]    keep the device parked in its boot guard (SWD safe)
   release                  let a held device continue booting
@@ -25,16 +30,19 @@ Requires: pip install pyocd   (plus the Puya pack providing target py32f030x8)
 from __future__ import annotations
 
 import argparse
+import json
 import math
+import os
 import statistics
 import sys
 import time
 from dataclasses import dataclass
+from pathlib import Path
 
 # ─── Block layout (must match LbSyncBlock in lb_sync.h) ──────────────────────
 MAGIC0 = 0x4C425359                      # 'LBSY'
 MAGIC1 = MAGIC0 ^ 0xFFFFFFFF
-VERSION = 1
+VERSION = 2
 RAM_BASE = 0x20000000
 RAM_SIZE = 8 * 1024
 
@@ -42,10 +50,14 @@ BLOCK_FIELDS = [
     "magic0", "magic1", "version", "tick_addr", "seq", "ack_seq", "hold",
     "anchor_tick", "anchor_us_lo", "anchor_us_hi", "corr_ppb",
     "epoch_us_lo", "epoch_us_hi", "period_us",
+    "uid0", "uid1", "uid2", "uid3",
+    "temp_cdeg", "temp_min_cdeg", "temp_max_cdeg", "temp_sum_cdeg", "temp_n",
+    "temp_raw", "vref_raw", "stats_tick",
 ]
 W = {name: i for i, name in enumerate(BLOCK_FIELDS)}
 BLOCK_WORDS = len(BLOCK_FIELDS)
 
+NO_TEMP = -(1 << 31)                     # LB_NO_TEMP in lb_sync.h
 MAX_CORR_PPB = 50_000_000                # 5 %: anything bigger is not a real HSI error
 U32 = 1 << 32
 
@@ -102,6 +114,35 @@ class Block:
     @property
     def synced(self) -> bool:
         return self.ack_seq != 0 and self.ack_seq == self.seq
+
+    @property
+    def uid_bytes(self) -> bytes:
+        return b"".join(self.words[W[f"uid{i}"]].to_bytes(4, "little") for i in range(4))
+
+    @property
+    def uid(self) -> str:
+        """Full chip UID as 32 hex digits; empty if the firmware has not written one."""
+        b = self.uid_bytes
+        return b.hex() if any(b) else ""
+
+    @property
+    def short_uid(self) -> str:
+        """Wafer number and die X/Y (UID bytes 4 and 8-11): what tells units from one batch apart."""
+        b = self.uid_bytes
+        return b[4:5].hex() + "-" + b[8:12].hex() if any(b) else "?"
+
+    def temperature(self) -> dict | None:
+        """Temperature stats since the last adopted sync, in degC; None if there is no reading."""
+        t = s32(self.words[W["temp_cdeg"]])
+        if t == NO_TEMP:
+            return None
+        n = self.words[W["temp_n"]]
+        out = {"now_c": t / 100, "n": n, "raw": self.temp_raw, "vref_raw": self.vref_raw}
+        if n:
+            out.update(min_c=s32(self.words[W["temp_min_cdeg"]]) / 100,
+                       max_c=s32(self.words[W["temp_max_cdeg"]]) / 100,
+                       mean_c=s32(self.words[W["temp_sum_cdeg"]]) / n / 100)
+        return out
 
 
 class HostClock:
@@ -299,10 +340,14 @@ def measure_offset(dev: Device, blk: Block, n: int = 10, burst: int = 8):
 
 # ─── Commands ────────────────────────────────────────────────────────────────
 def grid_from_args(args):
-    if args.period_ms is not None:
+    if getattr(args, "every", None) is not None:
+        period_us = round(args.every * 1e6)
+    elif args.period_ms is not None:
         period_us = round(args.period_ms * 1000)
     else:
         period_us = round(60e6 / args.bpm)
+    if period_us >= U32:
+        raise SyncError("beat/show period must be under 71 minutes (it is stored in 32 bits of µs)")
     if period_us <= 0:
         raise SyncError("beat period must be positive")
     return round(args.epoch * 1e6), period_us
@@ -312,11 +357,13 @@ def cmd_sync(dev: Device, args, log=print) -> dict:
     epoch_us, period_us = grid_from_args(args)
     prev = dev.read_block()
     long_slope = None
+    elapsed_s = drift_ms = None
 
     if args.refine:
         if not prev.synced:
             raise SyncError("--refine needs a previous sync on this device (run plain `sync` first)")
         mean, sd, _ = measure_offset(dev, prev)
+        drift_ms = mean
         log(f"Drift since last sync: {mean:+.1f} ms (±{sd:.1f})")
 
     duration = args.duration if args.duration is not None else (30 if args.refine else 600)
@@ -348,13 +395,121 @@ def cmd_sync(dev: Device, args, log=print) -> dict:
     log(f"Beat grid: {60e6 / period_us:.3f} BPM, epoch {epoch_us / 1e6:.3f}")
     log(f"Measurement-limited drift over {h:g} h: ±{rel_se * h * 3600 * 1000:.0f} ms (1σ)")
     log("Temperature and supply-voltage changes usually dominate; check with `status` later.")
-    return {"anchor_tick": anchor_tick, "anchor_us": anchor_us, "corr_ppb": corr,
-            "epoch_us": epoch_us, "period_us": period_us, "seq": seq}
+    rec = visit_record("sync", prev, fit, corr, long_slope, args, elapsed_s, drift_ms)
+    rec.update({"anchor_tick": anchor_tick, "anchor_us": anchor_us, "corr_ppb": corr,
+                "epoch_us": epoch_us, "period_us": period_us, "seq": seq})
+    return rec
+
+
+def temp_text(t: dict | None) -> str:
+    if not t:
+        return "no reading yet"
+    s = f"{t['now_c']:.1f} °C now"
+    if "mean_c" in t:
+        s += f"; since last sync min {t['min_c']:.1f} / mean {t['mean_c']:.1f} / max {t['max_c']:.1f} (n={t['n']})"
+    return s
+
+
+def vcc_mv(blk: Block) -> int | None:
+    v = blk.vref_raw
+    return round(1200 * 4095 / v) if v else None
+
+
+def visit_record(kind: str, prev: Block, fit: Fit, corr_ppb: int, long_slope: float | None,
+                 args, elapsed_s: float | None = None, drift_ms: float | None = None) -> dict:
+    """One line of the visit log: what the device looked like when it was plugged in."""
+    rate_slope = long_slope if long_slope is not None else fit.slope
+    rec = {
+        "kind": kind,
+        "wall_s": round(time.time(), 3),
+        "uid": prev.uid, "short_uid": prev.short_uid,
+        "prev_synced": prev.synced,
+        "rate_source": "long" if long_slope is not None else "short",
+        "raw_rate_ppm": round((rate_slope / 1000.0 - 1.0) * 1e6, 3),   # device clock error, + = fast
+        "prev_corr_ppb": prev.corr_ppb if prev.synced else None,
+        "applied_corr_ppb": corr_ppb,
+        "vcc_mv": vcc_mv(prev),
+        "temp": prev.temperature(),
+    }
+    if elapsed_s is not None:
+        rec["elapsed_s"] = round(elapsed_s, 3)
+    if drift_ms is not None:
+        rec["drift_ms"] = round(drift_ms, 3)                 # offset found before re-syncing, + = device ahead
+        if elapsed_s:
+            rec["residual_ppm"] = round(drift_ms / 1000 / elapsed_s * 1e6, 3)
+    return rec
+
+
+def cmd_resync(dev: Device, args, log=print) -> dict:
+    """Quick re-sync for a device that has been running since a previous sync.
+
+    The previous anchor, held in the device's RAM, is the baseline: the clock
+    rate over the whole interval since then (typically an hour: ~0.5 ppm
+    resolution) replaces a long measurement. The beat grid is kept unless a new
+    one is given.
+    """
+    prev = dev.read_block()
+    log(f"Device {prev.short_uid}  (UID {prev.uid or 'not reported'})")
+    if not prev.synced:
+        if args.no_fallback:
+            raise SyncError("device is not synced (power-cycled?); run a full `sync`")
+        log("Not synced (power-cycled or new firmware): falling back to a full sync "
+            f"({args.full_duration:.0f} s).")
+        explicit = any(getattr(args, k, None) is not None for k in ("bpm", "period_ms", "every"))
+        full = argparse.Namespace(
+            duration=args.full_duration, interval=5.0, burst=args.burst, refine=False,
+            min_refine=600, horizon=1.0,
+            every=args.every, bpm=args.bpm if args.bpm is not None else 120.0,
+            period_ms=(args.period_ms if explicit else (prev.period_us / 1000 or None)),
+            epoch=(args.epoch if args.epoch is not None else prev.epoch_us / 1e6))
+        return cmd_sync(dev, full, log)
+
+    log(f"Previous state: {temp_text(prev.temperature())}")
+    drift, sd, last = measure_offset(dev, prev, n=args.offset_samples)
+    log(f"Drift since last sync: {drift:+.1f} ms (±{sd:.1f}); positive = device ahead")
+
+    samples = collect(dev, args.duration, args.interval, args.burst, log=lambda *a: None)
+    fit = fit_samples(samples)
+    wall_off = wall_minus_mono_ns(dev.clock)
+    d_rel = ((fit.tick0 - prev.anchor_tick) % U32) + fit.ym - 0.5
+    w_us = (fit.x0_ns + fit.xm * 1e9 + wall_off) / 1000
+    elapsed_s = (w_us - prev.anchor_us) / 1e6
+
+    if elapsed_s >= args.min_baseline:
+        long_slope, source = d_rel / elapsed_s, "long"
+        raw_ppm = (long_slope / 1000 - 1) * 1e6
+        log(f"Clock rate over the last {elapsed_s / 3600:.2f} h: {raw_ppm:+.2f} ppm "
+            f"(previous correction {prev.corr_ppb / 1000:+.2f} ppm)")
+        step = abs(raw_ppm + prev.corr_ppb / 1000)
+        if step > args.warn_ppm:
+            log(f"  note: rate moved {step:.0f} ppm since the last sync (temperature or supply change?)")
+    else:
+        # Too soon for a useful baseline: keep the old rate and only fix the offset.
+        long_slope, source = 1000.0 / (1 + prev.corr_ppb / 1e9), "kept"
+        log(f"Only {elapsed_s:.0f} s since the last sync (< {args.min_baseline:.0f} s): keeping the previous rate.")
+
+    anchor_tick, anchor_us, corr = compute_sync(fit, wall_off, long_slope)
+    epoch_us = round(args.epoch * 1e6) if args.epoch is not None else prev.epoch_us
+    if args.every is not None or args.period_ms is not None or args.bpm is not None:
+        _, period_us = grid_from_args(args)
+    else:
+        period_us = prev.period_us
+    seq = dev.write_sync(anchor_tick, anchor_us, corr, epoch_us, period_us)
+    log(f"Resynced (seq {seq}): rate correction {corr / 1000:+.2f} ppm; grid every {period_us / 1e6:g} s")
+
+    rec = visit_record("resync", prev, fit, corr, long_slope if source == "long" else None, args,
+                       elapsed_s=elapsed_s, drift_ms=drift)
+    rec.update({"rate_source": source, "seq": seq, "epoch_us": epoch_us, "period_us": period_us,
+                "anchor_tick": anchor_tick, "anchor_us": anchor_us, "corr_ppb": corr})
+    if source == "kept":
+        rec["raw_rate_ppm"] = None
+    return rec
 
 
 def cmd_status(dev: Device, args, log=print) -> dict:
     blk = dev.read_block()
     log(f"Sync block at 0x{blk.addr:08x}, tick @ 0x{blk.tick_addr:08x}, hold={blk.hold}")
+    log(f"Device {blk.short_uid}  (UID {blk.uid or 'not reported'}); {temp_text(blk.temperature())}")
     if not blk.synced:
         log("Not synced." + (f" (seq {blk.seq}, ack {blk.ack_seq})" if blk.seq else ""))
         return {"synced": False}
@@ -376,6 +531,152 @@ def cmd_hold(dev: Device, args, log=print):
 def cmd_release(dev: Device, args, log=print):
     dev.write("hold", 0)
     log("Released.")
+
+
+# ─── Visit log and drift report ──────────────────────────────────────────────
+DEFAULT_LOG = Path(__file__).resolve().parents[1] / "logs" / "lb_sync_log.jsonl"
+
+
+def append_log(path, rec: dict) -> None:
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a") as f:
+        f.write(json.dumps(rec, sort_keys=True) + "\n")
+        f.flush()
+        os.fsync(f.fileno())
+
+
+def load_log(path) -> list[dict]:
+    recs = []
+    with open(path) as f:
+        for n, line in enumerate(f, 1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                recs.append(json.loads(line))
+            except json.JSONDecodeError:
+                raise SyncError(f"{path}:{n}: not valid JSON")
+    return recs
+
+
+def ols(xs, ys):
+    """(slope, intercept) of the least-squares line, or None if x has no spread."""
+    n = len(xs)
+    if n < 2:
+        return None
+    xm, ym = sum(xs) / n, sum(ys) / n
+    sxx = sum((x - xm) ** 2 for x in xs)
+    if sxx < 1e-9:
+        return None
+    b = sum((x - xm) * (y - ym) for x, y in zip(xs, ys)) / sxx
+    return b, ym - b * xm
+
+
+def _stats(vals):
+    return (statistics.mean(vals), statistics.stdev(vals) if len(vals) > 1 else 0.0)
+
+
+def usable_visits(recs):
+    """Visits that measured the raw clock rate over a long baseline and have a temperature."""
+    out = []
+    for r in recs:
+        t = r.get("temp") or {}
+        if (r.get("rate_source") == "long" and r.get("raw_rate_ppm") is not None
+                and r.get("elapsed_s") and t.get("mean_c") is not None and r.get("uid")):
+            out.append(r)
+    return out
+
+
+def drift_report(recs: list[dict]) -> dict:
+    """Per-device and pooled statistics of the raw clock rate and its temperature dependence.
+
+    raw_rate_ppm is the device's HSI-derived clock error averaged over the time
+    since its previous sync (+ = fast), independent of any correction applied.
+    residual_ppm is what was left over after the correction (drift_ms/elapsed).
+    """
+    vis = usable_visits(recs)
+    per = {}
+    for r in vis:
+        per.setdefault(r["uid"], []).append(r)
+    devices = {}
+    for uid, rs in per.items():
+        rates = [r["raw_rate_ppm"] for r in rs]
+        temps = [r["temp"]["mean_c"] for r in rs]
+        d = {"short_uid": rs[0].get("short_uid", "?"), "visits": len(rs),
+             "rate_mean_ppm": _stats(rates)[0], "rate_sd_ppm": _stats(rates)[1],
+             "temp_min_c": min(temps), "temp_max_c": max(temps), "temp_mean_c": statistics.mean(temps)}
+        res = [r["drift_ms"] / (r["elapsed_s"] / 3600) for r in rs if r.get("drift_ms") is not None]
+        if res:
+            d["residual_ms_per_h_mean"] = statistics.mean(res)
+            d["residual_ms_per_h_worst"] = max(res, key=abs)
+        fit = ols(temps, rates) if len(rs) >= 3 else None
+        if fit:
+            d["ppm_per_degc"] = fit[0]
+        devices[uid] = d
+    pooled = {"visits": len(vis), "devices": len(per)}
+    if vis:
+        rates = [r["raw_rate_ppm"] for r in vis]
+        pooled["rate_mean_ppm"], pooled["rate_sd_ppm"] = _stats(rates)
+        fit = ols([r["temp"]["mean_c"] for r in vis], rates)
+        if fit and len(vis) >= 3:
+            pooled["ppm_per_degc_all"] = fit[0]
+        # Within-device slope: each device's own offset removed first, so unit-to-unit
+        # differences do not masquerade as a temperature effect.
+        sxy = sxx = 0.0
+        for rs in per.values():
+            if len(rs) < 2:
+                continue
+            xm = statistics.mean(r["temp"]["mean_c"] for r in rs)
+            ym = statistics.mean(r["raw_rate_ppm"] for r in rs)
+            for r in rs:
+                dx = r["temp"]["mean_c"] - xm
+                sxx += dx * dx
+                sxy += dx * (r["raw_rate_ppm"] - ym)
+        if sxx > 1e-9:
+            pooled["ppm_per_degc_within"] = sxy / sxx
+        # Spread between units: sd of per-device mean rates.
+        means = [d["rate_mean_ppm"] for d in devices.values()]
+        if len(means) > 1:
+            pooled["between_device_sd_ppm"] = statistics.stdev(means)
+    return {"devices": devices, "pooled": pooled, "skipped": len(recs) - len(vis)}
+
+
+def print_report(rep: dict, out=print) -> None:
+    p = rep["pooled"]
+    if not p["visits"]:
+        out("No usable visits yet (need `resync` visits with a long baseline and a temperature reading).")
+        if rep["skipped"]:
+            out(f"({rep['skipped']} log entries skipped: short baseline, first sync, or no temperature)")
+        return
+    out(f"{'device':<14}{'visits':>7}{'rate ppm (mean ± sd)':>24}{'temp °C (min–max)':>22}"
+        f"{'ppm/°C':>9}{'resid ms/h (mean / worst)':>28}")
+    for uid, d in sorted(rep["devices"].items()):
+        slope = f"{d['ppm_per_degc']:+.1f}" if "ppm_per_degc" in d else "—"
+        resid = (f"{d['residual_ms_per_h_mean']:+.0f} / {d['residual_ms_per_h_worst']:+.0f}"
+                 if "residual_ms_per_h_mean" in d else "—")
+        out(f"{d['short_uid']:<14}{d['visits']:>7}{d['rate_mean_ppm']:>+14.1f} ± {d['rate_sd_ppm']:<6.1f}"
+            f"{d['temp_min_c']:>12.1f}–{d['temp_max_c']:<8.1f}{slope:>9}{resid:>28}")
+    out(f"\nAll devices: {p['visits']} visits from {p['devices']} devices; "
+        f"rate {p['rate_mean_ppm']:+.1f} ± {p['rate_sd_ppm']:.1f} ppm")
+    if "between_device_sd_ppm" in p:
+        out(f"  unit-to-unit spread (sd of per-device means): {p['between_device_sd_ppm']:.1f} ppm")
+    if "ppm_per_degc_within" in p:
+        out(f"  temperature dependence within devices: {p['ppm_per_degc_within']:+.2f} ppm/°C "
+            f"(pooled, unit offsets removed)")
+    if "ppm_per_degc_all" in p:
+        out(f"  temperature dependence, all points together: {p['ppm_per_degc_all']:+.2f} ppm/°C")
+    if rep["skipped"]:
+        out(f"  ({rep['skipped']} log entries not used: short baseline, first sync, or no temperature)")
+
+
+def cmd_report(args, log=print):
+    path = Path(args.log)
+    if not path.exists():
+        raise SyncError(f"no log at {path} yet (run `resync` first)")
+    rep = drift_report(load_log(path))
+    print_report(rep, log)
+    return rep
 
 
 # ─── pyocd glue ──────────────────────────────────────────────────────────────
@@ -408,7 +709,12 @@ def run_with_device(args, fn):
                 if getattr(args, "reset", False):
                     target.reset()           # software reset → firmware re-enters boot guard
                     time.sleep(0.3)
-                return fn(Device(target), args)
+                result = fn(Device(target), args)
+                if (isinstance(result, dict) and result.get("kind")
+                        and not getattr(args, "no_log", False)):
+                    append_log(args.log, result)
+                    print(f"Logged to {args.log}")
+                return result
         except Exception as e:               # retry while waiting for a power-cycle (--wait)
             if time.monotonic() >= deadline:
                 if isinstance(e, SyncError):
@@ -434,6 +740,8 @@ def main(argv=None):
     ap.add_argument("--probe", "-u", help="debug probe unique ID (see `list`)")
     ap.add_argument("--target", "-t", default="py32f030x8", help="pyocd target (default py32f030x8)")
     ap.add_argument("--frequency", "-f", type=int, default=500_000, help="SWD clock Hz (default 500000)")
+    ap.add_argument("--log", default=str(DEFAULT_LOG), help=f"visit log, JSON lines (default {DEFAULT_LOG})")
+    ap.add_argument("--no-log", action="store_true", help="do not append this visit to the log")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("list", help="list debug probes")
@@ -445,12 +753,33 @@ def main(argv=None):
     g = sp.add_mutually_exclusive_group()
     g.add_argument("--bpm", type=float, default=120.0, help="beat tempo (default 120)")
     g.add_argument("--period-ms", type=float, help="beat period in ms instead of --bpm")
+    g.add_argument("--every", type=float, help="beat/show period in seconds instead of --bpm (e.g. 3600)")
     sp.add_argument("--epoch", type=float, default=0.0,
                     help="Unix time of beat 0 (default 0; keep identical on every device)")
     sp.add_argument("--refine", action="store_true",
                     help="use time since the previous sync as the rate baseline")
     sp.add_argument("--min-refine", type=float, default=600, help="minimum baseline for --refine, s")
     sp.add_argument("--horizon", type=float, default=6.0, help="hours to project drift over (default 6)")
+
+    rp = sub.add_parser("resync", help="quick re-sync of a device that was synced before")
+    rp.add_argument("--duration", type=float, default=10.0, help="sampling time in s (default 10)")
+    rp.add_argument("--interval", type=float, default=1.0, help="seconds between samples (default 1)")
+    rp.add_argument("--burst", type=int, default=8, help="reads per sample; fastest is kept (default 8)")
+    rp.add_argument("--offset-samples", type=int, default=5, help="reads used to measure the drift (default 5)")
+    rp.add_argument("--min-baseline", type=float, default=600,
+                    help="shortest time since the last sync that updates the rate, s (default 600); "
+                         "closer visits only fix the offset")
+    rp.add_argument("--warn-ppm", type=float, default=200,
+                    help="note when the rate moved this much since the last sync (default 200)")
+    rp.add_argument("--no-fallback", action="store_true", help="fail instead of doing a full sync on an unsynced device")
+    rp.add_argument("--full-duration", type=float, default=600, help="fallback full-sync length, s (default 600)")
+    g2 = rp.add_mutually_exclusive_group()
+    g2.add_argument("--bpm", type=float, default=None, help="new beat tempo (default: keep the device's grid)")
+    g2.add_argument("--period-ms", type=float, default=None, help="new beat period in ms")
+    g2.add_argument("--every", type=float, default=None, help="new beat/show period in seconds")
+    rp.add_argument("--epoch", type=float, default=None, help="new Unix time of beat 0 (default: keep)")
+
+    sub.add_parser("report", help="drift statistics per device and over all devices, from the log")
 
     st = sub.add_parser("status", help="report drift vs this host")
     st.add_argument("--samples", type=int, default=10)
@@ -465,8 +794,11 @@ def main(argv=None):
     try:
         if args.cmd == "list":
             cmd_list(args)
+        elif args.cmd == "report":
+            cmd_report(args)
         else:
-            fn = {"sync": cmd_sync, "status": cmd_status, "hold": cmd_hold, "release": cmd_release}[args.cmd]
+            fn = {"sync": cmd_sync, "resync": cmd_resync, "status": cmd_status,
+                  "hold": cmd_hold, "release": cmd_release}[args.cmd]
             run_with_device(args, fn)
     except SyncError as e:
         print(f"error: {e}", file=sys.stderr)

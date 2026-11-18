@@ -49,11 +49,11 @@ In practice: at 120 BPM, 1% error is 5 ms per beat, so two devices can drift a f
 ```
 lightning_bugs/
 ├── host/
-│   ├── lb_sync.py          pyocd sync tool (list / sync / status / hold / release)
+│   ├── lb_sync.py          pyocd sync tool (list / sync / resync / report / status / hold / release)
 │   └── test_lb_sync.py     simulated-device tests (no hardware needed)
 └── firmware/lightning_bugs/
-    ├── lb_sync.h           sync block, master clock, beat grid, boot guard
-    ├── lightning_bugs.ino  example: beat-synced LED patterns
+    ├── lb_sync.h           sync block, master clock, beat grid, boot guard, chip UID, die temperature
+    ├── lightning_bugs.ino  timed light show (comet chase), dark between shows
     └── matrix_map.h        LED map (copied from the main firmware)
 ```
 
@@ -64,9 +64,33 @@ lightning_bugs/
 3. The host writes back an **anchor** (local tick ↔ Unix µs), a **rate correction** in parts per billion, and the **beat grid** (epoch + period). A sequence counter keeps the firmware from adopting a half-written block, and the firmware acknowledges the new sync.
 4. The firmware computes master time from `millis()` using the same integer formula the host uses to check it:
    `master_us = anchor_us + L*1000 + L*corr_ppb/1e6`, with `L = millis() − anchor_tick`.
-5. Effects are **scheduled against absolute beat times** (`lbWaitUntil(lbBeatTime(n))`), never chained `delay()`s. Each beat's pattern is computed from the beat number alone, so every device shows the same thing at the same moment.
+5. Effects are **scheduled against absolute beat times** (`lbWaitUntil(lbBeatTime(n))`), never chained `delay()`s. Each frame is computed from the master time (or beat number) alone, so every device shows the same thing at the same moment.
 
 Beat `n` falls at Unix time `epoch + n × period`. Every device synced against an NTP-disciplined computer shares that timeline, so you can sync devices **one at a time with a single probe**, even on different days, as long as `--bpm` and `--epoch` match.
+
+## Hourly visits: `resync`, the visit log and `report`
+
+The firmware (`lightning_bugs.ino`) plays one show, the stock firmware's halo "comet chase" (about 6 s), at the start of every beat of the grid and keeps the LED panels dark, with the LED driver's power cut, in between. Use the grid as the show cadence: `--every 3600` is a show on every UTC hour (the period is stored in 32 bits of µs, so it can be at most 71 minutes). A unit that is not synced flashes its centre cluster for 0.1 s every 2 s.
+
+First sync of a unit (about 10 minutes), then every time you plug it in:
+
+```sh
+python3 host/lb_sync.py sync   --every 3600 --epoch 0     # once per unit, after flashing or a power cycle
+python3 host/lb_sync.py resync                            # each visit, about 15 s
+python3 host/lb_sync.py report                            # drift statistics so far
+```
+
+`resync` uses the anchor the device already holds in RAM from the previous visit as the baseline. The clock rate over the whole interval since then (an hour gives roughly 0.5 ppm resolution, against a few ppm from 10 minutes of sampling) replaces a long measurement; the visit only samples for 10 s to fix the offset. It keeps the device's beat grid unless you pass `--every`/`--bpm`/`--period-ms`/`--epoch`. If the previous visit was less than `--min-baseline` (600 s) ago it only re-anchors and keeps the old rate. A device that has lost power (unsynced) falls back to a full sync (`--no-fallback` makes that an error). The device must have been running continuously since its last sync: a battery disconnect or reset wipes the RAM anchor and `millis()`.
+
+**Device ID.** The firmware copies the chip's factory UID (16 bytes at `0x1FFF0E00`: lot, wafer, die X/Y; reference manual 4.3) into the sync block, so every visit is tied to a physical chip. There is nothing to configure and two units cannot be flashed with the same ID. `status` and `resync` print a short form (`wafer-XYZ`) and the full 32-digit UID is in the log. It is a *chip* ID: it will not tell you which vape in a drawer is which, so note the short ID against a sticker.
+
+**Temperature.** The die temperature sensor is read through the ADC every 10 s while the firmware is idle (never within 0.3 s of a show frame). The sensor is converted with the two factory points `TS_CAL1`/`TS_CAL2` (30 °C and 85 °C at Vref+ = 3.3 V, `0x1FFF0F14/18`) after scaling by the supply voltage seen through VREFINT, since the ADC reference is the battery. The block holds the latest value and the min, max and mean since the last sync was adopted, so each visit logs the temperature *over the interval being measured*, not just at plug-in. This is the die (junction) temperature, so expect it to read a little above the cell and case, and the datasheet gives only ±1–2 °C linearity and ±5 °C at the 30 °C point. For drift data what matters is that it is consistent from visit to visit.
+
+**The log** (`logs/lb_sync_log.jsonl`, git-ignored; `--log` to move it, `--no-log` to skip) gets one JSON line per `sync` and `resync` with: the UID, the drift found at plug-in (`drift_ms`, positive = device ahead), the *raw* clock error over the interval (`raw_rate_ppm`, independent of any correction already applied), the temperature stats, supply voltage, and the correction written. Copy it somewhere durable; it lives only where you ran the tool.
+
+`report` needs no hardware. For each device it prints the mean and spread of the raw rate, the temperature range, a ppm/°C fit (three or more visits) and the residual drift in ms per hour; then, over all devices, the unit-to-unit spread, the temperature coefficient with each unit's own offset removed (`within`), and the naive pooled one. Only visits with a long baseline and a temperature reading are used.
+
+> **Verified (no hardware):** the host code, against a simulated device with a temperature-dependent clock (`host/test_lb_sync.py`), and that the sketch builds and passes the safety checks. **Not verified on a unit:** that `analogRead(ATEMP)`/`analogRead(AVREF)` from the py32duino core return sensible counts on this chip (the raw counts are published in the block, `temp_raw` and `vref_raw`, so check them first), the LED driver's power-up time after `PA15` goes low (`LED_WAKE_LEAD_MS`, 100 ms), and the SWD behaviour of `resync` on a running unit.
 
 ## Build and flash wrapper
 
