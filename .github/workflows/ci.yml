@@ -102,10 +102,10 @@ jobs:
       - run: python lightning_bugs/tools/lb_stack.py --all
       - run: python -m pytest lightning_bugs/tests/test_lb_stack.py -ra
 
-  # Single stable gate. Require ONLY this job's name ("ci-ok") in the branch ruleset, not the per-entry
+  # Single stable gate. Require ONLY this job's name ("aggregated-ci") in the branch ruleset, not the per-entry
   # matrix names (e.g. "unit (ubuntu-24.04, 3.10)"): when a matrix entry is dropped (an OS going EOL)
   # its old name never reports again and every PR would wait forever.
-  ci-ok:
+  aggregated-ci:
     if: always()
     needs: [lint, unit, repo-config, integration, toolchain]
     runs-on: ubuntu-24.04
