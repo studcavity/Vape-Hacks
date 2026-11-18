@@ -32,3 +32,35 @@ def test_block_layout_matches_firmware_header():
     assert all(int(idx) == lb.W[f] for f, idx in fields), "a [n] index comment is wrong"
     assert len(fields) == lb.BLOCK_WORDS
     assert lb.RAM_SIZE == 8 * 1024
+
+
+def _header_defines():
+    """The numeric #defines of lb_sync.h / lb_power_policy.h / lb_version.h, evaluated."""
+    import re
+    import pathlib
+    fw = pathlib.Path(lb.__file__).resolve().parents[1] / "firmware/lightning_bugs"
+    text = "\n".join((fw / n).read_text() for n in ("lb_sync.h", "lb_power_policy.h", "lb_version.h"))
+    defs = {}
+    for name, expr in re.findall(r"^#define\s+(LB_\w+)\s+(.+?)\s*(?://.*)?$", text, re.M):
+        expr = re.sub(r"\(int32_t\)", "", expr)          # LB_NO_TEMP's cast
+        expr = re.sub(r"(0x[0-9A-Fa-f]+|\d+)u\b", r"\1", expr)
+        try:
+            defs[name] = eval(expr, {}, dict(defs))      # our own checked-in header, constants only
+        except Exception:
+            pass                                         # not a plain constant expression
+    return defs
+
+
+def test_header_constants_match_firmware():
+    """Magic, format version and sentinels are duplicated by hand in Python; they must not drift."""
+    import lb_catalog
+    d = _header_defines()
+    assert lb.MAGIC0 == d["LB_MAGIC0"]
+    assert lb.MAGIC1 == d["LB_MAGIC1"] & 0xFFFFFFFF
+    assert lb.FORMAT_MAJOR == d["LB_FORMAT_MAJOR"]
+    newest = max((s for s in lb_catalog.FORMATS.specs if not s.legacy), key=lambda s: (s.major, s.minor))
+    assert (newest.major, newest.minor) == (d["LB_FORMAT_MAJOR"], d["LB_FORMAT_MINOR"]), \
+        "newest FormatSpec in lb_catalog.FORMATS differs from the firmware's LB_FORMAT_*"
+    assert lb_catalog.NO_TEMP == d["LB_NO_TEMP"] - (1 << 32 if d["LB_NO_TEMP"] >= 1 << 31 else 0)
+    assert lb.LOW_BATT_MV == d["LB_LOW_MV"]
+    assert lb_catalog.DEFAULT_MODEL == d["LB_MODEL_ID"], "firmware's default LB_MODEL_ID != host DEFAULT_MODEL"
