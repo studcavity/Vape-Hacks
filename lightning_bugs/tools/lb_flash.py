@@ -40,6 +40,7 @@ SKETCH_DIR = ROOT / "firmware" / "lightning_bugs"
 BUILD_DIR = ROOT / "build"
 CANARY_FILE = ROOT / ".lb_canary.json"
 sys.path.insert(0, str(ROOT / "host"))
+import lb_catalog  # noqa: E402  (pure data; the models lb_sync.py also knows)
 
 # The py32duino board identifier depends on how the core was installed; override
 # with --fqbn. Run `arduino-cli board listall PY32` to find yours.
@@ -180,17 +181,45 @@ def embedded_header(binf: Path):
     return None
 
 
+def embedded_model_id(binf: Path) -> int | None:
+    """The model_id word of the initialised lbBlock in a built .bin, or None if there is none to read."""
+    import lb_sync
+    hdr = embedded_header(binf)
+    layout = lb_catalog.CATALOG.formats.layout(hdr.major, hdr.minor) if hdr and not hdr.legacy else None
+    if layout is None or lb_catalog.CATALOG.model_field not in layout:
+        return None
+    data = binf.read_bytes()
+    magic = lb_sync.MAGIC0.to_bytes(4, "little") + lb_sync.MAGIC1.to_bytes(4, "little")
+    i = data.find(magic)
+    off = i + 4 * layout.index[lb_catalog.CATALOG.model_field]
+    return int.from_bytes(data[off:off + 4], "little") if i >= 0 and off + 4 <= len(data) else None
+
+
+def pick_model(name: str | None):
+    """The catalog Model for --model NAME (the first model when not given)."""
+    models = list(lb_catalog.MODELS)
+    if name is None:
+        return models[0]
+    for m in models:
+        if m.name == name:
+            return m
+    raise Fail(f"unknown model {name!r}; known models: {', '.join(m.name for m in models)}")
+
+
 def cmd_build(args) -> Path:
     cmd_check(args)
+    model = pick_model(getattr(args, "model", None))
     cli = shutil.which("arduino-cli")
     if not cli:
         raise Fail("arduino-cli not found (install it, then `arduino-cli core install` the py32duino core)")
     BUILD_DIR.mkdir(exist_ok=True)
     stamp = build_stamp()
     cmd = [cli, "compile", "--fqbn", args.fqbn, "--output-dir", str(BUILD_DIR)]
+    flags = [f"-DLB_MODEL_ID={model.id}u"]
     if stamp:
-        cmd += ["--build-property",
-                f"compiler.cpp.extra_flags=-DLB_BUILD_ID=0x{stamp[0]:08x}u -DLB_BUILD_DIRTY={int(stamp[1])}"]
+        flags += [f"-DLB_BUILD_ID=0x{stamp[0]:08x}u", f"-DLB_BUILD_DIRTY={int(stamp[1])}"]
+    cmd += ["--build-property", "compiler.cpp.extra_flags=" + " ".join(flags)]
+    log(f"model: {model.name} (id {model.id})")
     cmd.append(str(SKETCH_DIR))
     log("$ " + " ".join(cmd))
     if subprocess.run(cmd).returncode:
@@ -212,6 +241,10 @@ def cmd_build(args) -> Path:
         log("warning: no sync-block header found in the binary; cannot confirm what version it reports")
     else:
         log(f"this build reports: {lb_sync.describe_header(hdr)}")
+        mid = embedded_model_id(binf)
+        if mid is not None and mid != model.id:
+            raise Fail(f"model id was not applied (binary says {mid}, expected {model.id} for {model.name}): "
+                       "refusing to produce a build that reports the wrong model")
         if stamp and hdr.build != stamp[0]:
             raise Fail(f"build id was not stamped into the firmware (binary says {hdr.build:08x}, "
                        f"expected {stamp[0]:08x}): refusing to produce a build that cannot say what it is")
@@ -620,7 +653,11 @@ def main() -> int:
     ap.add_argument("--frequency", "-f", type=int, default=DEFAULT_FREQ)
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("check", help="source safety check only")
-    sub.add_parser("build", help="check, compile, check binary")
+    model_default = lb_catalog.MODELS[0].name
+    model_help = (f"board model to build for (default {model_default}; known: "
+                  f"{', '.join(m.name for m in lb_catalog.MODELS)}); sets the id the unit reports")
+    bp = sub.add_parser("build", help="check, compile, check binary")
+    bp.add_argument("--model", default=model_default, choices=[m.name for m in lb_catalog.MODELS], help=model_help)
     wp = sub.add_parser("watch", help="poll the SWD port and report when/for how long the chip answers")
     wp.add_argument("--timeout", type=float, default=60.0, metavar="SECONDS", help="stop after this long (default 60)")
     op = sub.add_parser("options", help="read the option bytes and DBGMCU registers (read-only)")
@@ -639,6 +676,7 @@ def main() -> int:
     dp.add_argument("--poll-timeout", "--timeout", type=float, default=120.0, metavar="SECONDS",
                     help="give up after this long with --poll (default 120)")
     fp = sub.add_parser("flash", help="check, build, flash, verify reconnect")
+    fp.add_argument("--model", default=model_default, choices=[m.name for m in lb_catalog.MODELS], help=model_help)
     fp.add_argument("--canary", action="store_true", help="this unit is a canary (recoverable without opening)")
     fp.add_argument("--yes", action="store_true", help="don't prompt before flashing a sealed unit")
     fp.add_argument("--bin", help="flash an existing .bin instead of building")

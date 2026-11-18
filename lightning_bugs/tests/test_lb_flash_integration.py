@@ -47,6 +47,50 @@ def test_cli_build_invokes_arduino_cli_and_passes(tree, fakebin):
     assert "binary safety check: ok (4 bytes)" in r.stdout
 
 
+def _flags(call):
+    return call[call.index("--build-property") + 1]
+
+
+def test_cli_build_defaults_to_the_first_model(tree, fakebin):
+    import lb_catalog
+    first = lb_catalog.MODELS[0]
+    r = cli(tree, "build")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert f"-DLB_MODEL_ID={first.id}u" in _flags(fakebin()[0])
+    assert f"model: {first.name} (id {first.id})" in r.stdout
+
+
+def test_cli_build_passes_the_chosen_model_id(tree, fakebin):
+    import lb_catalog
+    extra = lb_catalog.Model(7, "pulsex-test", lb_catalog.MODELS[0].traits)
+    path = tree / "host" / "lb_catalog.py"
+    path.write_text(path.read_text().replace("    PULSEX,", f"    PULSEX,\n    PULSEX.derive(7, {extra.name!r}),", 1))
+    r = cli(tree, "build", "--model", "pulsex-test")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "-DLB_MODEL_ID=7u" in _flags(fakebin()[0])
+
+
+def test_cli_build_rejects_unknown_model_and_lists_known_ones(tree, fakebin):
+    r = cli(tree, "build", "--model", "bogus")
+    assert r.returncode != 0 and "pulsex" in r.stderr and fakebin() == []
+
+
+def test_cli_build_refuses_a_binary_reporting_the_wrong_model(tree, fakebin):
+    import struct
+    import lb_sync
+    layout = lb_catalog_layout()
+    w = [0] * layout.words
+    w[0], w[1], w[2], w[3] = lb_sync.MAGIC0, lb_sync.MAGIC1, 4 << 16, layout.words
+    w[layout.index["model_id"]] = 5                                   # firmware says model 5; we asked for 0
+    r = cli(tree, "build", env={"FAKE_BIN_HEX": struct.pack("<%dI" % len(w), *w).hex()})
+    assert r.returncode == 1 and "model id was not applied" in r.stdout
+
+
+def lb_catalog_layout():
+    import lb_catalog
+    return lb_catalog.CATALOG.formats.layout(4, lb_catalog.CATALOG.formats.latest(4))
+
+
 def test_cli_build_stops_before_compiling_when_source_check_fails(tree, fakebin):
     (tree / "firmware" / "lightning_bugs" / "x.h").write_text("SCB->SCR |= SLEEPDEEP;\n")
     assert cli(tree, "build").returncode == 1

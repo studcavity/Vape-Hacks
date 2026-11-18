@@ -130,15 +130,15 @@ CORE = Trait("core", capabilities=("clock_sync", "hold", "identity"), transports
 DIE_TEMP = Trait("die-temp", capabilities=("temperature",))
 BATTERY_SENSE = Trait("battery-sense", capabilities=("power",))
 
-BUG = Model(0, "py32-bug", (CORE, DIE_TEMP, BATTERY_SENSE))
+PULSEX = Model(0, "pulsex", (CORE, DIE_TEMP, BATTERY_SENSE))
 MODELS = [
-    BUG,
+    PULSEX,                       # the first model is lb_flash.py build/flash --model's default
     # A new board is one line, composed from what it shares with the others, e.g.
-    #   BUG.derive(1, "py32-bug-lite", drop=("die-temp",)),                 # same, but no temperature
-    #   BUG.derive(2, "py32-bug-radio", add=(Trait("radio", transports=("radio",)),)),   # + a radio link
+    #   PULSEX.derive(1, "pulsex-lite", drop=("die-temp",)),                 # same, but no temperature
+    #   PULSEX.derive(2, "pulsex-radio", add=(Trait("radio", transports=("radio",)),)),   # + a radio link
     # A board that converts a reading differently gets a marker trait (Trait("temp-cal-b")) and the
     # feature gets a Variant requiring HasTrait("temp-cal-b") with its own decoder.
 ]
-DEFAULT_MODEL = BUG.id             # what a format without a model word (or a model id of 0) means
+DEFAULT_MODEL = MODELS[0].id       # what a format without a model word means (and lb_flash's default --model)
 
 CATALOG = Catalog(FORMATS, FEATURES, COMMANDS, MODELS, TRANSPORTS, default_model=DEFAULT_MODEL)

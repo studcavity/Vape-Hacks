@@ -367,10 +367,10 @@ class VersionTests(unittest.TestCase):
     def test_model_word_is_reported_and_logged(self):
         clock, tgt = self.target()
         dev = lb.Device(tgt, clock)
-        self.assertEqual(dev.unit.model.name, "py32-bug")
+        self.assertEqual(dev.unit.model.name, "pulsex")
         self.assertEqual(dev.read_block().model_id, 0)
         rec = lb.cmd_sync(dev, sync_args(duration=60), log=lambda *a: None)
-        self.assertEqual(rec["model"], "py32-bug")
+        self.assertEqual(rec["model"], "pulsex")
 
     def test_unknown_model_is_refused_with_its_id(self):
         clock, tgt = self.target()
@@ -385,7 +385,7 @@ class VersionTests(unittest.TestCase):
         out = []
         lb.cmd_info(tgt, None, log=out.append)
         text = "\n".join(out)
-        for word in ("temperature", "clock_sync", "resync", "model py32-bug"):
+        for word in ("temperature", "clock_sync", "resync", "model pulsex"):
             self.assertIn(word, text)
 
     def test_truncated_block_is_refused(self):
