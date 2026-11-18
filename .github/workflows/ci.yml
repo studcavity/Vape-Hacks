@@ -101,3 +101,21 @@ jobs:
       - run: arduino-cli version && arduino-cli core list
       - run: python lightning_bugs/tools/lb_stack.py --all
       - run: python -m pytest lightning_bugs/tests/test_lb_stack.py -ra
+
+  # Single stable gate. Require ONLY this job's name ("ci-ok") in the branch ruleset, not the per-entry
+  # matrix names (e.g. "unit (ubuntu-24.04, 3.10)"): when a matrix entry is dropped (an OS going EOL)
+  # its old name never reports again and every PR would wait forever.
+  ci-ok:
+    if: always()
+    needs: [lint, unit, repo-config, integration, toolchain]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Fail unless every job succeeded
+        env:
+          RESULTS: ${{ toJSON(needs.*.result) }}
+        run: |
+          echo "$RESULTS"
+          if echo "$RESULTS" | jq -e 'all(. == "success") | not' >/dev/null; then
+            echo "one or more required jobs did not succeed" >&2
+            exit 1
+          fi
