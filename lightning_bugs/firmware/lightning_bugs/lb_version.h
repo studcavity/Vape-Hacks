@@ -22,3 +22,9 @@
 #ifndef LB_BUILD_DIRTY
 #define LB_BUILD_DIRTY 0
 #endif
+
+// Which board this is. The host knows what each id can do (sensors, links) from host/lb_catalog.py,
+// so the firmware only reports it. Build for another board with  -DLB_MODEL_ID=<id>u.
+#ifndef LB_MODEL_ID
+#define LB_MODEL_ID 0u
+#endif

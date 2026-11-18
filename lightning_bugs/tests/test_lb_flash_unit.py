@@ -211,3 +211,24 @@ def test_build_stamp_outside_git_is_none(tmp_path, monkeypatch):
     monkeypatch.setattr(lb_flash, "ROOT", tmp_path)
     monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path.parent))
     assert lb_flash.build_stamp() is None
+
+
+def test_embedded_model_id_is_read_from_the_binary(tmp_path):
+    import struct
+    import lb_catalog
+    layout = lb_catalog.CATALOG.formats.layout(4, 0)
+    w = _header_words()
+    w += [0] * (layout.words - len(w))
+    w[layout.index["model_id"]] = 3
+    f = tmp_path / "x.bin"
+    f.write_bytes(b"\x01" * 12 + struct.pack("<%dI" % len(w), *w))
+    assert lb_flash.embedded_model_id(f) == 3
+    f.write_bytes(bytes(range(256)))
+    assert lb_flash.embedded_model_id(f) is None
+
+
+def test_pick_model_defaults_to_the_first_and_rejects_unknown():
+    import lb_catalog
+    assert lb_flash.pick_model(None) is lb_catalog.MODELS[0] and lb_catalog.MODELS[0].name == "pulsex"
+    with pytest.raises(lb_flash.Fail, match="unknown model 'x'.*pulsex"):
+        lb_flash.pick_model("x")

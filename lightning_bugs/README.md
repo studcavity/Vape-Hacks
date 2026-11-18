@@ -105,14 +105,37 @@ STOP freezes `millis()`, so a unit that has slept is **unsynced**: after chargin
 ```sh
 python3 host/lb_sync.py info
 # Sync block at 0x20000400: firmware 0.4.0 (build a13ccff2+dirty), wire format 4.0
-#   compatible with this lb_sync.py (speaks wire format 4.0)
+#   compatible with this lb_sync.py (reads it as wire format 4.0); model pulsex
+#     clock_sync  ok (v1)
+#     temperature ok (v1)
+#     ...
+#     sync        ok
+#     resync      ok
 ```
 
 Every unit reports three things in the first eight words of its sync block, which never move or change meaning again: the **wire format** (`major.minor`), the **firmware version** (`LB_FW_*` in `firmware/lightning_bugs/lb_version.h`, bumped by hand), and a **build ID** (the first 8 hex digits of the git commit, plus `+dirty` if the tree had uncommitted changes). `tools/lb_flash.py build` stamps the build ID in with a compiler flag and then reads the header back out of the binary, so a build that cannot say what it is fails instead of flashing. A build made some other way (Arduino IDE) reports "build unknown".
 
 `info` works against any format, including ones this script cannot speak, and it recognises the older formats 1-3 (before version reporting) as "wire format N, firmware unknown" rather than "no sync block". `status`, `resync` and `sync` print the same line, every log entry records `fw`, `fw_build`, `fw_dirty` and `format`, and `report` lists the firmware versions in the log and warns when they are mixed.
 
-**Compatibility rule.** A different *major* is a different layout: the host refuses it and says which firmware and format the unit has and which it speaks. A higher *minor* only ever appends words at the end of the block (the block size word grows), so a script with the same major and a minor no higher than the unit's keeps working; a unit with an older minor is refused because it lacks fields. Reordering or reinterpreting any word needs a new major (and `FORMAT_MAJOR` in `lb_sync.py`, `LB_FORMAT_MAJOR` in `lb_sync.h`). Format 4 is the one breaking change that introduced this scheme: units still running formats 1-3 need reflashing once.
+**Compatibility.** Three independent facts describe a unit, and each answers a different question:
+
+| fact | answers | how it changes |
+| --- | --- | --- |
+| wire format `major.minor` | which words exist, and where | a minor only *appends* words (the block size word grows); a new major reorders or reinterprets and is unreadable to older scripts |
+| firmware version | what the words *mean* | a field recomputed in fw X keeps its name and position, so gate it on firmware, not format |
+| model | which hardware it is | the firmware only reports a `model_id` word (`-DLB_MODEL_ID=<id>u`); what each id *can do* lives in Python |
+
+A script reads each unit with **that unit's own layout** (every format ever released is listed in `host/lb_catalog.py`), so an older minor is readable. Whether it is *usable* is decided per command, not globally: `host/lb_catalog.py` maps each command to the **features** it needs (`clock_sync`, `temperature`, `power`, ...), and each feature lists **variants**, newest first, each guarded by a requirement such as `Fields("temp_cdeg") & Firmware(min=(0, 6, 0)) & HasTrait("temp-cal-b")` and carrying the decoder for that case. A command whose *required* features are missing is refused with every reason at once ("`sync` needs clock_sync (v1: wire format 4.0 has no seq)"); a missing *optional* feature (say power on an old unit) is noted and left out of the log record. A newer minor than the script knows is read as its known prefix; a different major, or formats 1-3, is refused with the unit's firmware and format and the script's. `info` prints, per unit, every feature (and which variant it gets) and every command (ok / ok without X / not supported, with reasons).
+
+**Models** are composed in `host/lb_catalog.py` from reusable **traits**: a trait lists the features the hardware can provide and the transports that reach it, so a new board is one line, e.g. `PULSEX.derive(1, "pulsex-lite", drop=("die-temp",))` (no temperature) or `PULSEX.derive(2, "pulsex-radio", add=(Trait("radio", transports=("radio",)),))`. A feature the model has no trait for is reported as unsupported ("model 'pulsex-lite' has no temperature"), and a model is only reachable over the transports its traits list. A board that computes something differently gets a marker trait that a feature variant requires (`HasTrait("temp-cal-b")`), so new boards that share it are picked up without touching the variant. An id the script has never heard of is refused with its number rather than guessed at. Build for a model with `python3 tools/lb_flash.py build --model NAME` (also accepted by `flash`; the default is the first model in `MODELS`, `pulsex`): it sets `-DLB_MODEL_ID` and then reads the id back out of the binary, failing the build if it does not match.
+
+Requirements also cover the *connection* (each `Transport` in the catalog says what it allows): `Access("write")` is what `sync`, `resync` and `hold` need, so a future read-only link can fetch and decode blocks (`Catalog.unit_from_words` identifies a unit from the header, or the whole block, however it arrived) and gets a clear refusal for anything that writes.
+
+To record a change, edit `host/lb_catalog.py` only (its docstring has the recipe): a new minor is a `FormatSpec` plus the struct in `lb_sync.h`; changed semantics are a new, newer `Variant` (keep the old one for old firmware); a new model is a `Model` (id + traits) in `MODELS`, plus a marker trait and variant only where it computes something differently. Format 4.0 has not been flashed to any unit yet, so it may still be amended; after that, only append. Units still running formats 1-3 (if any exist) need reflashing once. The code is in `host/lb_compat.py` (generic, no project data) and `host/lb_catalog.py` (the data).
+
+## Stack budgets
+
+Each model carries `ram_bytes` and `max_stack_bytes` (from its chip trait in `host/lb_catalog.py`; the tightest value among a model's traits wins). `python3 tools/lb_stack.py [--model NAME | --all]` builds the firmware in a scratch directory with `-fstack-usage -fcallgraph-info=su` and computes a worst case: the longest call chain from `main()` (and the static constructors), plus, for each interrupt priority group in `INTERRUPT_GROUPS`, the 32 B exception frame, its longest handler chain and a 32 B allowance for callbacks behind function pointers. Library helpers with no source frame data (divide, memset, startup) are sized from the linked ELF's disassembly. It exits 1 if the total exceeds the model's `max_stack_bytes`, or if that budget is larger than the stack the linker reserves (`_Min_Stack_Size`, 768 B), since the budget would then not be guaranteed. The tests run it for every model (`pytest -m toolchain`; skipped when `arduino-cli` or the core is missing; the `toolchain` CI job installs both with `tools/setup.sh` and sets `LB_REQUIRE_TOOLCHAIN=1`, which turns that skip into a failure). It is a static bound over calls the compiler can see, not a measurement of a running unit; if the sketch starts using another interrupt, add it to `INTERRUPT_GROUPS`.
 
 ## Build and flash wrapper
 

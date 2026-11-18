@@ -40,10 +40,12 @@
  *     [6] build flags (bit0: built from a dirty tree)   [7] &uwTick
  *   so a host can always find a block and say what it is, even one it cannot
  *   talk to. Compatibility rule: a different MAJOR is a different layout. A
- *   higher MINOR only appends words at the end (the block size grows), so a
- *   host that speaks the same major and a minor no higher than the unit's
- *   still works. Anything else that changes order or meaning needs a new major.
- *   The layout must match BLOCK_FIELDS in host/lb_sync.py.
+ *   higher MINOR only appends words at the end (the block size grows); a host
+ *   reads each unit with that unit's own layout and decides per command whether
+ *   the fields, firmware version and model it has are enough (host/lb_catalog.py).
+ *   Changing what a word *means* is a firmware-version matter, recorded there as
+ *   a new variant; reordering a word needs a new major.
+ *   The layout must match FORMATS in host/lb_catalog.py.
  */
 #pragma once
 #include <Arduino.h>
@@ -103,6 +105,8 @@ struct LbSyncBlock {
     volatile uint32_t batt_mv;         // [30] latest supply/battery voltage in mV, 0 = never read
     volatile uint32_t power_state;     // [31] bit0 = low-battery latched, bit1 = USB present
     volatile uint32_t wake_count;      // [32] stop-mode wakes since boot
+    // ── board model (the host maps this id to what the board can do; see host/lb_catalog.py) ──
+    uint32_t model_id;                 // [33] LB_MODEL_ID
 };
 #define LB_BLOCK_WORDS (sizeof(LbSyncBlock) / 4)
 
@@ -112,7 +116,8 @@ __attribute__((used, aligned(4))) static LbSyncBlock lbBlock = {
     0, 0, 0, 0, 0, 0, 0, 0, 0, LB_DEFAULT_PERIOD_US,
     0, 0, 0, 0,
     LB_NO_TEMP, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0
+    0, 0, 0,
+    LB_MODEL_ID
 };
 
 // Firmware-side snapshot, refreshed from lbBlock whenever seq changes.
