@@ -144,7 +144,7 @@ def test_opt_in_run_stays_inside_the_repo(rig):
     tools = rig.root / ".tools"
     want = f"DATA={tools / 'arduino15'} USER={tools / 'arduino-user'} DL={tools / 'arduino-downloads'}"
     assert arduino and all(want in c for c in arduino), "data, sketchbook AND download-staging dirs must all be inside the repo"
-    assert any(c.startswith("pip install -q -e") and "constraints.txt" in c for c in calls), "pins must apply"
+    assert any(c.startswith("pip install -q pyocd") and "PIP_CONSTRAINT=" in c and c.endswith("constraints.txt") for c in calls), "pins must apply"
     assert "ARDUINO_DIRECTORIES_DATA" in r.stdout, "should tell the user which variables to export"
 
 

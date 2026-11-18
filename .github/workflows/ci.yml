@@ -2,6 +2,7 @@ name: ci
 
 on:
   push:
+    branches: [main]
   pull_request:
 
 # Both Ubuntu releases the sandbox may run on are covered (24.04 now, 26.04 after the upgrade). The
