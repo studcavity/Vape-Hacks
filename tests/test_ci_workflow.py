@@ -18,3 +18,10 @@ def test_toolchain_job_builds_for_real_and_cannot_skip():
 def test_unit_job_still_excludes_toolchain_and_integration_tests():
     run = "\n".join(str(s.get("run", "")) for s in WORKFLOW["jobs"]["unit"]["steps"])
     assert '-m "not integration"' in run
+
+
+def test_triggers_are_pull_requests_and_pushes_to_main_only():
+    # PyYAML parses the bare key `on` as True.
+    on = WORKFLOW.get("on", WORKFLOW.get(True))
+    assert on["push"]["branches"] == ["main"]
+    assert "pull_request" in on
