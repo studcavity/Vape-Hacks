@@ -126,11 +126,16 @@ TRANSPORTS = [
 # ─── Models ──────────────────────────────────────────────────────────────────
 # A model is an id (what the firmware reports in `model_id`, set with -DLB_MODEL_ID) plus traits.
 # A trait is what the hardware can provide (feature names) and the transports that reach it.
+# The chip: RAM size, and the most stack the firmware may use on it. 768 B is the stack the linker
+# reserves in every build (_Min_Stack_Size in the core's ldscript), so it cannot be crowded out by
+# statics; tools/lb_stack.py checks the firmware's worst-case chain against it, and its tests check
+# this number against the linker's. A model with less RAM gets its own chip trait.
+PY32F030X8 = Trait("py32f030x8", ram_bytes=8 * 1024, max_stack_bytes=768)
 CORE = Trait("core", capabilities=("clock_sync", "hold", "identity"), transports=("swd",))
 DIE_TEMP = Trait("die-temp", capabilities=("temperature",))
 BATTERY_SENSE = Trait("battery-sense", capabilities=("power",))
 
-PULSEX = Model(0, "pulsex", (CORE, DIE_TEMP, BATTERY_SENSE))
+PULSEX = Model(0, "pulsex", (PY32F030X8, CORE, DIE_TEMP, BATTERY_SENSE))
 MODELS = [
     PULSEX,                       # the first model is lb_flash.py build/flash --model's default
     # A new board is one line, composed from what it shares with the others, e.g.

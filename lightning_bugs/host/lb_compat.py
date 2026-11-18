@@ -174,11 +174,15 @@ class Trait:
     name: str
     capabilities: frozenset = frozenset()     # feature names the hardware can provide
     transports: frozenset = frozenset()       # ways of reaching a unit with this trait
+    ram_bytes: int = 0                        # total RAM (0 = this trait says nothing)
+    max_stack_bytes: int = 0                  # stack the firmware may use on this model (0 = unspecified)
 
-    def __init__(self, name: str, capabilities=(), transports=()):
+    def __init__(self, name: str, capabilities=(), transports=(), ram_bytes: int = 0, max_stack_bytes: int = 0):
         object.__setattr__(self, "name", name)
         object.__setattr__(self, "capabilities", frozenset(capabilities))
         object.__setattr__(self, "transports", frozenset(transports))
+        object.__setattr__(self, "ram_bytes", ram_bytes)
+        object.__setattr__(self, "max_stack_bytes", max_stack_bytes)
 
 
 @dataclass(frozen=True)
@@ -195,6 +199,20 @@ class Model:
     @property
     def transports(self) -> frozenset:
         return frozenset().union(*(t.transports for t in self.traits))
+
+    def _limit(self, attr: str) -> int:
+        """The tightest value any trait declares (0 if none does): a model built from several
+        traits can only rely on the smallest budget it was given."""
+        vals = [getattr(t, attr) for t in self.traits if getattr(t, attr)]
+        return min(vals) if vals else 0
+
+    @property
+    def ram_bytes(self) -> int:
+        return self._limit("ram_bytes")
+
+    @property
+    def max_stack_bytes(self) -> int:
+        return self._limit("max_stack_bytes")
 
     def has_trait(self, name: str) -> bool:
         return any(t.name == name for t in self.traits)
