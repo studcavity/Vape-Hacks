@@ -90,7 +90,8 @@ FEATURES = [
         Variant("v1", Fields("uid0", "uid1", "uid2", "uid3"), decode_identity_v1),)),
     # A recomputed temperature would be added in FRONT as, say,
     #   Variant("v2", Fields(...) & Firmware(min=(0, 6, 0)), decode_temperature_v2),
-    # and a board that lacks the sensor would get  NotModel("no-sensor-board")  on every variant.
+    # and a board with a different sensor gets a marker Trait plus a variant requiring HasTrait(...).
+    # A board with no sensor needs nothing here: its Model simply lacks the "die-temp" trait.
     Feature("temperature", doc="die temperature since the last adopted sync", variants=(
         Variant("v1", Fields("temp_cdeg", "temp_min_cdeg", "temp_max_cdeg", "temp_sum_cdeg", "temp_n",
                              "temp_raw", "vref_raw") & Firmware(min=FIRST_FW), decode_temperature_v1),)),
