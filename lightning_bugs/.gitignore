@@ -4,3 +4,4 @@ build/
 .venv/
 # setup.sh --i-know-this-modifies-my-system keeps arduino-cli and the core here
 .tools/
+logs/

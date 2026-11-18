@@ -166,3 +166,48 @@ def test_binary_symbol_check_finds_nm_in_a_relocated_data_dir(monkeypatch, tmp_p
     problems = lb_flash.check_binary(elf, binf)
     assert any("HAL_PWR_EnterSTOPMode" in p for p in problems), problems
     assert "not found" not in capsys.readouterr().err
+
+
+# ─── version stamping ────────────────────────────────────────────────────────
+def _header_words(fmt=(4, 0), fw=(0, 4, 0), build=0xA13CCFF2, flags=0):
+    import lb_sync
+    w = [0] * lb_sync.HEADER_WORDS
+    w[0], w[1] = lb_sync.MAGIC0, lb_sync.MAGIC1
+    w[2], w[3] = fmt[0] << 16 | fmt[1], 33
+    w[4], w[5], w[6], w[7] = fw[0] << 16 | fw[1] << 8 | fw[2], build, flags, 0x200002F8
+    return w
+
+
+def test_embedded_header_is_found_in_a_binary(tmp_path):
+    import struct
+    words = _header_words(build=0xA13CCFF2, flags=1)
+    blob = b"\xde\xad\xbe\xef" * 7 + struct.pack("<%dI" % len(words), *words) + b"\x00" * 40
+    f = tmp_path / "x.bin"
+    f.write_bytes(blob)
+    h = lb_flash.embedded_header(f)
+    assert (h.major, h.minor, h.fw, h.build, h.dirty) == (4, 0, (0, 4, 0), 0xA13CCFF2, True)
+
+
+def test_embedded_header_absent(tmp_path):
+    f = tmp_path / "x.bin"
+    f.write_bytes(bytes(range(256)))
+    assert lb_flash.embedded_header(f) is None
+
+
+def test_build_stamp_reads_git(tmp_path, monkeypatch):
+    import subprocess
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false",
+                    "commit", "-q", "--allow-empty", "-m", "x"], check=True)
+    monkeypatch.setattr(lb_flash, "ROOT", tmp_path)
+    head = subprocess.run(["git", "-C", str(tmp_path), "rev-parse", "--short=8", "HEAD"],
+                          capture_output=True, text=True, check=True).stdout.strip()
+    assert lb_flash.build_stamp() == (int(head, 16), False)
+    (tmp_path / "new.txt").write_text("x")
+    assert lb_flash.build_stamp() == (int(head, 16), True)
+
+
+def test_build_stamp_outside_git_is_none(tmp_path, monkeypatch):
+    monkeypatch.setattr(lb_flash, "ROOT", tmp_path)
+    monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path.parent))
+    assert lb_flash.build_stamp() is None

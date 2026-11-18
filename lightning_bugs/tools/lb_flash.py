@@ -151,13 +151,47 @@ def cmd_check(_args) -> None:
 
 
 # ─── build ───────────────────────────────────────────────────────────────────
+def build_stamp() -> tuple[int, bool] | None:
+    """(first 8 hex digits of HEAD as an int, tree has uncommitted changes), or None outside a git checkout.
+
+    Stamped into the firmware (lb_version.h) so a unit can report exactly what it is running."""
+    def git(*a):
+        r = subprocess.run(["git", *a], cwd=ROOT, capture_output=True, text=True)
+        return r.stdout.strip() if r.returncode == 0 else None
+    head = git("rev-parse", "--short=8", "HEAD")
+    status = git("status", "--porcelain")
+    if not head or status is None:
+        return None
+    try:
+        return int(head[:8], 16), bool(status)
+    except ValueError:
+        return None
+
+
+def embedded_header(binf: Path):
+    """The sync-block header image inside a built .bin (the initialised lbBlock in flash), or None."""
+    import lb_sync
+    data = binf.read_bytes()
+    for i in range(0, len(data) - 4 * lb_sync.HEADER_WORDS + 1, 4):
+        if int.from_bytes(data[i:i + 4], "little") == lb_sync.MAGIC0 and \
+                int.from_bytes(data[i + 4:i + 8], "little") == lb_sync.MAGIC1:
+            words = [int.from_bytes(data[i + 4 * k:i + 4 * k + 4], "little") for k in range(lb_sync.HEADER_WORDS)]
+            return lb_sync.parse_header(words)
+    return None
+
+
 def cmd_build(args) -> Path:
     cmd_check(args)
     cli = shutil.which("arduino-cli")
     if not cli:
         raise Fail("arduino-cli not found (install it, then `arduino-cli core install` the py32duino core)")
     BUILD_DIR.mkdir(exist_ok=True)
-    cmd = [cli, "compile", "--fqbn", args.fqbn, "--output-dir", str(BUILD_DIR), str(SKETCH_DIR)]
+    stamp = build_stamp()
+    cmd = [cli, "compile", "--fqbn", args.fqbn, "--output-dir", str(BUILD_DIR)]
+    if stamp:
+        cmd += ["--build-property",
+                f"compiler.cpp.extra_flags=-DLB_BUILD_ID=0x{stamp[0]:08x}u -DLB_BUILD_DIRTY={int(stamp[1])}"]
+    cmd.append(str(SKETCH_DIR))
     log("$ " + " ".join(cmd))
     if subprocess.run(cmd).returncode:
         raise Fail("build failed")
@@ -172,6 +206,15 @@ def cmd_build(args) -> Path:
             log("  " + p)
         raise Fail("binary safety check failed")
     log(f"binary safety check: ok ({binf.stat().st_size} bytes)")
+    import lb_sync
+    hdr = embedded_header(binf)
+    if hdr is None:
+        log("warning: no sync-block header found in the binary; cannot confirm what version it reports")
+    else:
+        log(f"this build reports: {lb_sync.describe_header(hdr)}")
+        if stamp and hdr.build != stamp[0]:
+            raise Fail(f"build id was not stamped into the firmware (binary says {hdr.build:08x}, "
+                       f"expected {stamp[0]:08x}): refusing to produce a build that cannot say what it is")
     return binf
 
 

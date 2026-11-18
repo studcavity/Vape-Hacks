@@ -29,5 +29,6 @@ def test_block_layout_matches_firmware_header():
     fields = re.findall(r"^\s*(?:volatile\s+)?u?int32_t\s+(\w+);\s*(?://\s*\[(\d+)\])?",
                         body, re.M)
     assert [f for f, _ in fields] == lb.BLOCK_FIELDS
+    assert all(int(idx) == lb.W[f] for f, idx in fields), "a [n] index comment is wrong"
     assert len(fields) == lb.BLOCK_WORDS
     assert lb.RAM_SIZE == 8 * 1024
