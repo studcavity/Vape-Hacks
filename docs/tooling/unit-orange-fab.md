@@ -78,8 +78,7 @@ pole blanks the LEDs, a move off it wakes the unit, and PA2's edge works as a wa
 **Not shown:** real STOP behaviour. `DBG_STOP` is set (every pyocd connection sets it again), so clocks may keep running and the tick counter cannot
 prove sleep (it ran continuously through a logged sleep). Not measured: sleep current, the `millis()` rate after a wake, and whether the unit
 stays reachable over SWD while asleep: with the unit apparently asleep the raw SWD debug port answered but full connects failed ("Unexpected ACK 5", an invalid coresight
-ROM read), which is what a stopped bus clock would look like. A run of four failed connects while the user said the switch was at "on" is unexplained: the connects worked at
-the middle position and again afterwards at "on". A clean test (battery disconnect, no probe during the sleep, read the tick after the wake) is described in
+ROM read), which is what a stopped bus clock would look like. Runs of failed connects while the switch was at "on" (the unstable mid-rail position, see [the mode switch note](../hardware/mode-switch.md)) were unexplained then; a later run showed the unit had put itself to sleep with the switch not at the off pole (see below). A clean test (battery disconnect, no probe during the sleep, read the tick after the wake) is described in
 [the power policy](../lightning-bugs/power-policy.md).
 
 **Tool checks on this unit (2026-11-19, firmware 0.5.1):** the following ran on the real unit or build and worked as described, with no bugs found.[^flash-tool]
@@ -90,5 +89,12 @@ the middle position and again afterwards at "on". A clean test (battery disconne
 - `lb_sync.py sync --duration 60 --every 30`: seq 2, rate correction +1807 ppm (this chip's clock ran about 0.18 % slow), residual 0.57 ms RMS, probe round trip about 0.5 ms.
 - `status` afterwards: offset -1.5 ms (±0.3). Two `resync` runs: drift -2.5 ms since the last sync each time, previous rate kept (under 600 s since the last sync).
 - `report`: "no usable visits yet", because every logged visit was a first sync or had a baseline under 600 s. It needs `resync` visits at least 10 minutes apart.
+
+**Unexplained sleep with the switch not at the off pole (2026-11-19, firmware 0.5.1).** After a `sync`, an off-and-back test and a fallback `resync --full-duration 60`
+(which worked: seq 8, grid kept), the unit stopped answering SWD ("Unexpected ACK 5") with the switch left where it was (not at off). `status` after the user toggled the
+switch showed `woken from sleep 5x` (4 before) and "Not synced (seq 8, ack 0)", so `sleepSwitchOff()` had run: it is only entered after four PA2 samples under 20 counts.
+A 10-minute PA2 log from the diagnostic build (0.5.99, flashed back for this) did not reproduce a dip: at "on" PA2 read a steady 372 counts for 170 s and at "middle" a steady 4093 for
+about 6 minutes; the only low value was a minimum of 93 in the first seconds after boot. So the cause is not shown. Open suspects: the first ADC reads after a reset or a
+STOP wake being low, and something at the end of an SWD session. The next step is a sleep trace in the firmware (the ADC values at each sleep entry and right after each wake).
 
 [^flash-tool]: lb_flash.py (watch and dump)
