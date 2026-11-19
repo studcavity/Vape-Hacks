@@ -46,6 +46,15 @@ This is the unit's original firmware, taken before any flashing. Its initial sta
 `backup_flash.bin`: 27,697 of 65,536 bytes differ (SHA-256 of that file `ca2460e4...fc35`), where Peach Jam's dump is recorded as differing from it
 in 5 bytes. So this unit runs a different firmware build from Peach Jam's.[^flash-tool]
 
-**Not yet done on this unit:** any reading of its option bytes (the option-byte findings in the repo are from Peach Jam's era, not this unit), and any flash.
+**Option bytes** (2026-11-19, `options --poll --timeout 60`, connected on attempt 35): identical to Peach Jam's.[^flash-tool]
+User word `0x0155FEAA` valid, SDK word `0xFF0000FF`, write-protect word `0x0000FFFF` (none of the 16 sectors protected), RDP `0xAA` (level 0, no read
+protection), NRST is a GPIO (no reset pin), IWDG and WWDG are software, BOR off, `nBOOT1` = 1. Live `FLASH_OPTR` `0x0000FEAA` matches.
+
+**Debug bits:** `RCC_APBENR1` `0x98000000` (DBGEN set), `DBGMCU_CR` `0x00000002`, so `DBG_STOP` is **set**, as are the
+freeze registers' defaults: `APB_FZ1` and `APB_FZ2` are 0. DBGMCU `IDCODE` reads `0x60001000`. The `dump` and `watch` runs earlier in the
+session connected through pyocd, which sets these bits, and they stay until the battery is disconnected, so this reading does not describe the
+original firmware and a sleep-current measurement taken now would include it.[^flash-tool]
+
+**Not yet done on this unit:** any flash.
 
 [^flash-tool]: lb_flash.py (watch and dump)
