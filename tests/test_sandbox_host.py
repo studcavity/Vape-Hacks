@@ -29,8 +29,32 @@ def usb(doc):
     return doc["usb"]
 
 
-def test_only_the_usb_key(doc):
-    assert set(doc) == {"usb"}
+def test_only_known_keys(doc):
+    assert set(doc) == {"usb", "files"}
+
+
+# `files:` = sha256-pinned host files placed under the sandbox user's home (deps-file docs, "Pinned files").
+FILE_KEYS = {"name", "host_path", "dest", "sha256", "on_error"}
+
+
+def test_files_entries_are_pinned_optional_and_consistent(doc):
+    files = doc["files"]
+    assert files and len({f["name"] for f in files}) == len(files)
+    for f in files:
+        assert set(f) == FILE_KEYS and NAME.match(f["name"])
+        assert re.fullmatch(r"[0-9a-f]{64}", f["sha256"])
+        assert f["on_error"] == "skip", "a missing pre-download must never stop a launch"
+        assert f["host_path"].startswith("~/software/") and f["dest"] == f["host_path"]
+        assert ".." not in f["dest"]
+
+
+def test_files_hashes_match_the_pins_in_setup_sh(doc, repo):
+    """setup.sh re-verifies every pre-downloaded file against its own table; the two must agree."""
+    text = (repo / "lightning_bugs" / "tools" / "setup.sh").read_text()
+    pins = dict(re.findall(r"^\s+\[([^\]]+)\]=([0-9a-f]{64})$", text, re.M))
+    assert pins
+    got = {f["dest"].rsplit("/", 1)[1]: f["sha256"] for f in doc["files"]}
+    assert got == pins
 
 
 def test_entries_follow_the_launcher_schema(usb):
