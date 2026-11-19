@@ -37,11 +37,11 @@ def test_block_layout_matches_firmware_header():
 
 
 def _header_defines():
-    """The numeric #defines of lb_sync.h / lb_power_policy.h / lb_version.h, evaluated."""
+    """The numeric #defines of lb_sync.h / lb_switch.h / lb_version.h, evaluated."""
     import re
     import pathlib
     fw = pathlib.Path(lb.__file__).resolve().parents[1] / "firmware/lightning_bugs"
-    text = "\n".join((fw / n).read_text() for n in ("lb_sync.h", "lb_power_policy.h", "lb_version.h"))
+    text = "\n".join((fw / n).read_text() for n in ("lb_sync.h", "lb_switch.h", "lb_version.h"))
     defs = {}
     for name, expr in re.findall(r"^#define\s+(LB_\w+)\s+(.+?)\s*(?://.*)?$", text, re.M):
         expr = re.sub(r"\(u?int32_t\)", "", expr)         # C casts (LB_NO_TEMP, LB_FW_VERSION)
@@ -64,7 +64,6 @@ def test_header_constants_match_firmware():
     assert (newest.major, newest.minor) == (d["LB_FORMAT_MAJOR"], d["LB_FORMAT_MINOR"]), \
         "newest FormatSpec in lb_catalog.FORMATS differs from the firmware's LB_FORMAT_*"
     assert lb_catalog.NO_TEMP == d["LB_NO_TEMP"] - (1 << 32 if d["LB_NO_TEMP"] >= 1 << 31 else 0)
-    assert lb.LOW_BATT_MV == d["LB_LOW_MV"]
     assert lb_catalog.DEFAULT_MODEL == d["LB_MODEL_ID"], "firmware's default LB_MODEL_ID != host DEFAULT_MODEL"
 
 
@@ -119,7 +118,7 @@ def test_bit_flags_match_firmware_expressions():
     """power_state and fw_flags bits are literals in the firmware and in the host decoders."""
     import lb_catalog
     fw = pathlib_text("firmware/lightning_bugs/lb_sync.h")
-    assert "(lbPower.latched ? 1u : 0u) | (usb ? 2u : 0u)" in fw      # bit0 = low, bit1 = USB
+    assert "lbBlock.power_state = usb ? 2u : 0u;" in fw               # bit0 reserved (always 0), bit1 = USB
     assert "(LB_BUILD_DIRTY ? 1u : 0u)" in fw                          # fw_flags bit0 = dirty
     blk = type("B", (), {"batt_mv": 3700, "wake_count": 2})()
     for state, low, usb in [(0, False, False), (1, True, False), (2, False, True), (3, True, True)]:

@@ -57,12 +57,3 @@ def test_switch_not_at_off_pole_does_not_enter_stop(switch_exe):
     r = switch_exe()
     assert r["stop_wfis"] == "0" and r["released"] == "0"
 
-
-def test_low_battery_sleep_does_not_lose_a_usb_edge_that_lands_just_before_it(switch_exe):
-    r = switch_exe("lowbatt-lost-edge")
-    assert r["stop_wfis"] == "0", "USB appeared before STOP; the unit must not sleep through it"
-
-
-def test_low_battery_sleep_still_sleeps_until_usb_appears(switch_exe):
-    r = switch_exe("lowbatt")
-    assert int(r["stop_wfis"]) >= 20000 and r["released"] == "1"

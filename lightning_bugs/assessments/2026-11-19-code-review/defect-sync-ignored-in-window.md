@@ -13,6 +13,8 @@ sources:
 
 # Problem
 
+**Update:** `holdWindow()` was removed with the shelved low-battery sleep; only the boot-guard part below still applies.
+
 `holdWindow()` (60 s awake window) and `lbBootGuard()` (3 s, or while `hold` is set) never call `lbPoll()`. The host's `write_sync` waits 3 s for `ack_seq`.
 
 # Failure

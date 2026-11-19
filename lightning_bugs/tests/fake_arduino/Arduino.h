@@ -38,7 +38,6 @@ struct Sim {
     int level[64] = {};
     void (*onWfi)() = nullptr;              // called after every simulated 1 ms tick
     unsigned long wfiCalls = 0;
-    void (*onWrite)(int pin, int v) = nullptr;   // called after every digitalWrite
     unsigned long stopWfis = 0;             // WFIs entered with SLEEPDEEP set (STOP)
     uint32_t pa2Adc = 1500;                 // what analogRead(PA2) returns: <20 GND, >2000 VDDA, else mid-rail
 };
@@ -52,7 +51,7 @@ inline uint32_t millis() { return uwTick; }
 inline void delay(uint32_t ms) { while (ms--) tick(); }
 inline void delayMicroseconds(uint32_t) {}
 inline void pinMode(int, int) {}
-inline void digitalWrite(int pin, int v) { sim.level[pin] = v; if (sim.onWrite) sim.onWrite(pin, v); }
+inline void digitalWrite(int pin, int v) { sim.level[pin] = v; }
 inline int digitalRead(int pin) { return sim.level[pin]; }
 inline int digitalPinToInterrupt(int pin) { return pin; }
 inline void attachInterrupt(int, void (*)(), int) {}

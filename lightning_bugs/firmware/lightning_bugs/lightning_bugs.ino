@@ -19,18 +19,12 @@
  * which units still need a sync. While idle the firmware also samples the die
  * temperature and keeps the chip UID in the sync block (see lb_sync.h).
  *
- * Battery protection (lb_power_policy.h): the cell has no protection circuit, so
- * once the supply stays at or below 3.60 V the unit stops showing, gives you a
- * 60 s awake window (SWD reachable), then sleeps in STOP mode until the slide
- * switch moves or USB power appears. Every wake opens another 60 s window and
- * then, if the battery is still low, sleeps again, so accidental wakes cost
- * about 7 uAh each. STOP freezes millis(), so a woken unit is unsynced and
- * needs a new `lb_sync.py sync`. With USB power present the unit runs normally.
- *
- * Switch-off sleep: moving the slide switch to its off pole (PA2 at GND, the
- * stock firmware's "sleep" position) puts the unit into STOP at once, whatever
- * the battery or USB say, and any move off that pole wakes it. A unit that has
- * slept is unsynced. See sleepSwitchOff().
+ * Sleep: moving the slide switch to its off pole (PA2 at GND, the stock
+ * firmware's "sleep" position) puts the unit into STOP at once, and any move off
+ * that pole wakes it. STOP freezes millis(), so a woken unit is unsynced and needs
+ * a new `lb_sync.py sync`. There is no automatic low-battery protection: the cell
+ * has none that we have found, so switch the unit off and charge it; see
+ * docs/lightning-bugs/power-policy.md for the shelved design.
  *
  * LED driver code is a trimmed copy of the stock firmware. Board: Generic
  * PY32F030 (py32duino). Flash with tools/lb_flash.py.
@@ -102,17 +96,12 @@ static void ledsDark() {                  // blank the driver, then cut its powe
     ledsLeftLit = false;
 }
 
-// ─── Low-battery sleep ───────────────────────────────────────────────────────
-// Wake sources: PF0 rising (USB power appears) and PA2 any edge (slide switch).
-// The ISRs only set flags; they stay attached all the time so the toggle count
-// can spot a chattering switch (PA2 is analog-biased on this board, and mid-rail
-// may sit on the digital threshold).
-static volatile bool    wakeFlag = false;
-static volatile uint8_t switchToggles = 0;
-static volatile bool    switchChanged = true;     // PA2 moved (or boot): re-read the switch before the next decision
-static bool             switchIsOff = false;
-static void onUsbWake()    { wakeFlag = true; }
-static void onSwitchWake() { wakeFlag = true; switchChanged = true; if (switchToggles < 255) switchToggles++; }
+// ─── Switch-off sleep ────────────────────────────────────────────────────────
+// Wake source: PA2 any edge (slide switch). The ISR only sets flags.
+static volatile bool wakeFlag = false;
+static volatile bool switchChanged = true;        // PA2 moved (or boot): re-read the switch before the next decision
+static bool          switchIsOff = false;
+static void onSwitchWake() { wakeFlag = true; switchChanged = true; }
 
 static void attachSwitchWake() { attachInterrupt(digitalPinToInterrupt(PA2), onSwitchWake, CHANGE); }
 
@@ -134,25 +123,6 @@ static void enterStopUntilWake() {
     }
 }
 
-static void sleepLowBattery() {
-    bool usbAtDecision = lbUsbPresent();                          // the wake edge is a rise from this level
-    ledsDark();                                                   // driver blank and unpowered (PA15 high)
-    bool chatter = switchToggles >= LB_MAX_SWITCH_TOGGLES;
-    if (chatter) detachInterrupt(digitalPinToInterrupt(PA2));     // USB only until the next USB wake
-    switchToggles = 0;
-    wakeFlag = false;
-    // USB appeared after the decision to sleep: the rising edge came before the line above cleared its
-    // flag. Count it as the wake. (Already present at the decision, below the floor: sleep anyway; the
-    // charger IC does not need the MCU, and the floor must hold if PF0's polarity was guessed wrong.)
-    if (!usbAtDecision && lbUsbPresent()) wakeFlag = true;
-    enterStopUntilWake();
-    if (chatter) attachSwitchWake();
-    lbBlock.wake_count++;
-    lbBlock.ack_seq = 0;                                          // millis() stood still: the old sync is void
-    lbS.synced = false;
-    lbPowerWoke(&lbPower, millis());
-}
-
 // True if the slide switch has stayed at its off pole (PA2 at GND) for LB_SWITCH_OFF_CONFIRM
 // samples. analogRead() puts PA2 in analog mode, where the digital edge cannot fire, so the pin is
 // put back to a digital input afterwards: nothing may sleep with PA2 left analog.
@@ -166,11 +136,11 @@ static bool switchAtOffPole() {
     return off;
 }
 
-// Switch moved to the off pole: stop at once, no window and no show, whatever the battery or USB say.
-// Any edge on PA2 wakes it; it sleeps again if the switch is still at the off pole. A mid-slide wake is
-// cheap, so there is no chatter handling here. The unit is unsynced afterwards (STOP stops millis()).
+// Switch moved to the off pole: stop at once, no show. Any edge on PA2 wakes it; it sleeps again if
+// the switch is still at the off pole. A mid-slide wake is cheap, so there is no chatter handling.
+// The unit is unsynced afterwards (STOP stops millis()).
 static void sleepSwitchOff() {
-    ledsDark();
+    ledsDark();                                                   // driver blank and unpowered (PA15 high)
     do {
         wakeFlag = false;
         if (digitalRead(PA2) != LOW) break;                       // already left GND: do not sleep on a missed edge
@@ -179,50 +149,18 @@ static void sleepSwitchOff() {
     switchIsOff = false;
     switchChanged = true;
     lbBlock.wake_count++;
-    lbBlock.ack_seq = 0;
+    lbBlock.ack_seq = 0;                                          // millis() stood still: the old sync is void
     lbS.synced = false;
-    lbPowerWoke(&lbPower, millis());
 }
 
-// Three short centre-cluster flashes: "low battery, going back to sleep".
-static void lowBatteryBlink() {
-    ledPower(true);
-    for (int i = 0; i < 3; i++) {
-        clearFrame();
-        for (int c = 0; c < HALO_CENTER_COUNT; c++) frame[HALO_MAP[HALO_RING_COUNT + c]] = 0xFF;
-        sendFrame();
-        delay(100);
-        clearFrame();
-        sendFrame();
-        delay(150);
-    }
-    ledsDark();
-}
-
-// Stay awake, dark, with SWD reachable, until the window ends, USB appears, or the
-// battery recovers. Readings continue (lbTempService) so a charge ends it early.
-static void holdWindow() {
-    static bool announced = false;
-    if (!announced) { announced = true; lowBatteryBlink(); }
-    while (lbPowerAction(&lbPower, millis()) == LB_PWR_WINDOW && !switchChanged) {
-        lbTempService(1000000);
-        __WFI();
-    }
-    announced = false;
-}
-
-// True if the power policy took over this pass (the caller should re-evaluate).
+// True if the switch took over this pass (the caller should re-evaluate).
 static bool powerGate() {
     if (switchChanged) { switchChanged = false; switchIsOff = switchAtOffPole(); }
     if (switchIsOff) { sleepSwitchOff(); return true; }
-    switch (lbPowerAction(&lbPower, millis())) {
-        case LB_PWR_WINDOW: holdWindow();       return true;
-        case LB_PWR_SLEEP:  sleepLowBattery();  return true;
-        default:                                return false;
-    }
+    return false;
 }
 
-static bool powerOk() { return !switchChanged && lbPowerAction(&lbPower, millis()) == LB_PWR_RUN; }
+static bool powerOk() { return !switchChanged; }
 
 // ─── Boot guard indicator: single halo LED spinning ──────────────────────────
 static void guardSpinner(uint32_t elapsedMs) {
@@ -288,7 +226,6 @@ void setup() {
     pinMode(PA15, OUTPUT); ledPower(true);               // LED driver power on for the guard indicator
     pinMode(PF0, INPUT_PULLUP);                          // USB sense (as the stock firmware)
     pinMode(PA2, INPUT);                                 // slide switch, used here only as a wake edge
-    attachInterrupt(digitalPinToInterrupt(PF0), onUsbWake, RISING);
     attachSwitchWake();
 
     // Nothing that can disturb SWD (PA13/PA14 remap, STOP mode, clock
@@ -302,7 +239,7 @@ static uint32_t waitSeq;
 static bool sameGridWait() { return lbS.seq == waitSeq && powerOk(); }
 
 void loop() {
-    if (powerGate()) return;                             // low battery: window, or sleep until woken
+    if (powerGate()) return;                             // switch at its off pole: sleep until it moves
     if (!lbSynced()) { unsyncedBlink(); return; }
 
     int64_t now    = lbMasterUs();

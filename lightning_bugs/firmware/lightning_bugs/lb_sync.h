@@ -50,7 +50,7 @@
 #pragma once
 #include <Arduino.h>
 #include <stdint.h>
-#include "lb_power_policy.h"
+#include "lb_switch.h"
 #include "lb_version.h"
 
 // HAL millisecond tick that backs millis(). Its address is published in the
@@ -101,9 +101,9 @@ struct LbSyncBlock {
     volatile uint32_t temp_raw;        // [27] latest ADC counts, temperature channel (12-bit)
     volatile uint32_t vref_raw;        // [28] latest ADC counts, VREFINT channel (12-bit)
     volatile uint32_t stats_tick;      // [29] millis() when the temperature stats were last restarted
-    // ── battery protection (see lb_power_policy.h) ──
+    // ── battery and power telemetry (no automatic protection: see docs/lightning-bugs/power-policy.md) ──
     volatile uint32_t batt_mv;         // [30] latest supply/battery voltage in mV, 0 = never read
-    volatile uint32_t power_state;     // [31] bit0 = low-battery latched, bit1 = USB present
+    volatile uint32_t power_state;     // [31] bit0 = reserved (was low-battery latched, always 0), bit1 = USB present
     volatile uint32_t wake_count;      // [32] stop-mode wakes since boot
     // ── board model (the host maps this id to what the board can do; see host/lb_catalog.py) ──
     uint32_t model_id;                 // [33] LB_MODEL_ID
@@ -153,7 +153,6 @@ static inline int64_t lbJoin64(uint32_t lo, uint32_t hi) {
 
 static uint16_t lbTsCal1 = 0, lbTsCal2 = 0;
 static uint32_t lbTempDueMs = 0;
-static LbPower lbPower = { 0, false, 0 };
 #define LB_USB_PIN PF0                   // HIGH = USB power present (stock firmware's reading)
 static inline bool lbUsbPresent() { return digitalRead(LB_USB_PIN) == HIGH; }
 
@@ -188,11 +187,10 @@ static void lbTempSample() {
     lbBlock.temp_raw = traw;
     if (vref < 200) return;                           // VREFINT not read: nothing below is trustworthy
     int32_t vcc_mv = (int32_t)((1200u * 4095u + vref / 2) / vref);        // supply = battery, mV
-    // Battery protection first: it must not depend on the temperature calibration being valid.
+    // Battery and USB telemetry first: they must not depend on the temperature calibration being valid.
     bool usb = lbUsbPresent();
     lbBlock.batt_mv = (uint32_t)vcc_mv;
-    lbPowerFeed(&lbPower, (uint32_t)vcc_mv, usb, millis());
-    lbBlock.power_state = (lbPower.latched ? 1u : 0u) | (usb ? 2u : 0u);
+    lbBlock.power_state = usb ? 2u : 0u;
     if (lbTsCal2 <= lbTsCal1 || lbTsCal2 > 4095) return;
     int32_t norm   = (int32_t)((traw * (uint32_t)vcc_mv + 1650u) / 3300u); // counts at 3.3 V
     int32_t c = 3000 + (5500 * (norm - (int32_t)lbTsCal1)) / ((int32_t)lbTsCal2 - (int32_t)lbTsCal1);
