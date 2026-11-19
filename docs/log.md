@@ -1,5 +1,6 @@
 ## 2026-11-19
 
+- Restored the canary's original firmware from its dump; a fresh dump is byte-identical (`tooling/unit-orange-fab.md`).
 - Corrected the switch labels in `hardware/mode-switch.md` (user's "on" is the mid-rail band, "middle" is VDDA, "off" is GND) and recorded an unexplained spontaneous sleep of firmware 0.5.1 in `tooling/unit-orange-fab.md`.
 - Ran `lb_stack.py`, `check` (negative cases), a sealed-unit `flash` refusal, `sync`, `status`, `resync` and `report` against the canary and recorded the results in `tooling/unit-orange-fab.md`; renamed a stale `lb_stack.py` label.
 - Took a second dump of Peach Jam: upstream image except 5 bytes in the `0xF000` page (likely counters), so its hash differs from the first dump's; corrected the offset of the second differing value to `0xF010`.

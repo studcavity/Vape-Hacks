@@ -97,4 +97,10 @@ A 10-minute PA2 log from the diagnostic build (0.5.99, flashed back for this) di
 about 6 minutes; the only low value was a minimum of 93 in the first seconds after boot. So the cause is not shown. Open suspects: the first ADC reads after a reset or a
 STOP wake being low, and something at the end of an SWD session. The next step is a sleep trace in the firmware (the ADC values at each sleep entry and right after each wake).
 
+**Original firmware restored (2026-11-19):** the unit was flashed back from its own original dump with `pyocd flash -O auto_unlock=false --base-address 0x08000000`
+(5 sectors rewritten, 45,056 bytes identical, the `0xF000` page untouched). A fresh dump afterwards has the SHA-256 `d78f4a5b…687c`, **identical to the original**. It then answered SWD
+only after repeated switch flips (connected on attempt 203), as the stock firmware does. `lb_flash.py` was not used, because it expects our sync block back from the unit.
+This unit therefore no longer runs any Lightning Bugs firmware (the last was the 0.5.99 diagnostic). `DBG_STOP` is still set from the earlier pyocd connections until the
+battery is disconnected, so the stock firmware's sleep current may read high until then.[^flash-tool]
+
 [^flash-tool]: lb_flash.py (watch and dump)
