@@ -25,3 +25,7 @@ Reproduced: an unsynced simulated unit, `resync` with no grid arguments, ends wi
 
 - Refuse the fallback unless a grid is given, when the block shows no host write since boot (`seq == 0`). After a low-battery STOP wake the block keeps its real grid (`seq != 0`), so keeping it is right there.
 - Always require `--every`, `--bpm` or `--period-ms` on fallback.
+
+# Resolution
+
+Fixed on branch `sbx/jolly-shannon/02-review-doc-and-fixes`: `cmd_resync` now refuses the fallback with a message naming `--every`, `--bpm` and `--period-ms` when no host has written to the block since boot (`seq == 0`) and no grid is given. A unit woken from low-battery STOP keeps its grid. Tests: `ResyncTests.test_fallback_after_boot_refuses_to_guess_the_grid` and `test_fallback_after_sleep_wake_keeps_the_grid_it_still_holds`.

@@ -536,9 +536,14 @@ def cmd_resync(dev: Device, args, log=print) -> dict:
     if not prev.synced:
         if args.no_fallback:
             raise SyncError("device is not synced (power-cycled?); run a full `sync`")
+        explicit = any(getattr(args, k, None) is not None for k in ("bpm", "period_ms", "every"))
+        if not explicit and prev.seq == 0:
+            # seq 0 means no host has written to this block since boot, so the grid in it is the firmware's
+            # 0.5 s default, not the one the unit had: reusing it would run a show every half second.
+            raise SyncError("device has just booted and has forgotten its beat grid: say which one to use "
+                            "(--every SECONDS, --bpm or --period-ms, and --epoch if it was not 0)")
         log("Not synced (power-cycled or new firmware): falling back to a full sync "
             f"({args.full_duration:.0f} s).")
-        explicit = any(getattr(args, k, None) is not None for k in ("bpm", "period_ms", "every"))
         full = argparse.Namespace(
             duration=args.full_duration, interval=5.0, burst=args.burst, refine=False,
             min_refine=600, horizon=1.0,
