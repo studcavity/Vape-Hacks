@@ -179,3 +179,17 @@ def test_pinned_versions_are_declared(script):
     text = script.read_text()
     assert re.search(r"^ARDUINO_CLI_VERSION=\d+\.\d+\.\d+", text, re.M)
     assert re.search(r"^CORE=PY32Duino:PY32@\d+\.\d+\.\d+", text, re.M)
+
+
+def test_predownloaded_file_with_wrong_hash_is_ignored(rig):
+    """~/software files are used only if they match the pin; a bad one is reported and never staged."""
+    sw = rig.home / "software"
+    sw.mkdir()
+    (sw / "Arduino-PY32-0.1.3.zip").write_bytes(b"not the real core")
+    (sw / "Puya.PY32F0xx_DFP.1.2.8.pack").write_bytes(b"not the real pack")
+    r, _ = rig(*([] if IN_SANDBOX else [OPT_IN]))
+    assert r.returncode == 0, r.stderr
+    assert r.stderr.count("sha256 does not match the pin") == 2
+    assert "Using pre-downloaded" not in r.stdout
+    assert not list(rig.root.parent.rglob("packages")), "a bad file must not be copied into arduino-cli's staging dir"
+    assert not (rig.home / ".local" / "share" / "cmsis-pack-manager").exists(), "a bad pack must not be installed"
