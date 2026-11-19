@@ -3,7 +3,8 @@ type: Defect
 title: Unit can enter STOP while USB power is present
 description: USB wake is rising-edge only and enterStopUntilWake clears the wake flag first, so an edge just before sleep is lost.
 tags: [firmware,power]
-confidence: read from code; re-read on 2026-11-19 and still present
+status: deprecated
+confidence: read from code; fixed and tested natively, then moot
 generated: { by: "claude-code/claude-sonnet-5-5", at: "2026-11-19T03:18:47Z" }
 sources:
   - resource: https://github.com/studcavity/Vape-Hacks/blob/main/lightning_bugs/firmware/lightning_bugs/lightning_bugs.ino
@@ -23,4 +24,7 @@ Check `lbUsbPresent()` just before entering STOP, and skip the sleep when it is 
 
 # Status
 
-**Open.** Re-checked against the code on 2026-11-19: not fixed.
+**Deprecated.** The lost edge was fixed (`sleepLowBattery()` counted a USB level that rose after the decision to sleep as the wake;
+a test failed without it), and then the whole low-battery sleep was shelved, so the code this note is about no longer exists. It is
+in commit `dda8ca5`. If that design is revived: a unit latched at or below the 3.4 V floor with USB *already* present still slept and
+did not notice charging until the next edge, on purpose (skipping the sleep would defeat the floor if PF0's polarity were wrong).

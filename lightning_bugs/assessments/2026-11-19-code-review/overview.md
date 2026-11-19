@@ -30,4 +30,4 @@ Updated 2026-11-19 after re-checking the code. Four defects are fixed (resync fa
 
 1. Do the canary flash with the existing process. Do not use a sealed unit until STOP wake-up, SWD-after-sleep and idle current are answered on the canary ([hardware risks](risks-hardware.md)).
 2. Decide whether to build the watchdog and forced-reset mitigations, or drop STOP mode. The firmware has no watchdog or SWD self-check (no `IWDG` or `lbSwdGuard` in the sources), yet it uses STOP.
-3. Fix the remaining defects: [24.8-day wrap](defect-tick-wrap-24-days.md), [sleep on USB](defect-sleep-with-usb-present.md), [window syncs](defect-sync-ignored-in-window.md).
+3. Fix the remaining defects: [24.8-day wrap](defect-tick-wrap-24-days.md), [boot-guard syncs](defect-sync-ignored-in-window.md). (Low-battery sleep, and with it [sleep on USB](defect-sleep-with-usb-present.md), was shelved on 2026-11-19; only the switch-off sleep remains.)

@@ -771,7 +771,7 @@ def drift_report(recs: list[dict]) -> dict:
             "battery": battery_report(recs), "firmware": firmware}
 
 
-LOW_BATT_MV = 3600       # lb_power_policy.h LB_LOW_MV: where the firmware protects the cell
+LOW_BATT_MV = 3600       # charge before this: the firmware has no low-battery protection (docs/lightning-bugs/power-policy.md)
 
 
 def battery_report(recs: list[dict]) -> dict:

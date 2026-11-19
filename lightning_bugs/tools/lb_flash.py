@@ -580,7 +580,8 @@ def cmd_dump(args) -> Path:
 
 # ─── watch ───────────────────────────────────────────────────────────────────
 WATCH_GAP_FAILS = 5        # consecutive failed attempts (~6 ms) that end an "answering" window
-DPIDR_CORTEX_M0P = 0x0BB11477
+# Both canary-era units (orange fucking fab and Peach Jam) answer 0x0BC11477. 0x0BB11477 is, from memory, the plain Cortex-M0 value (unsourced).
+DPIDR_CORTEX_M0P = 0x0BC11477
 
 
 def raw_attempt(probe) -> int:

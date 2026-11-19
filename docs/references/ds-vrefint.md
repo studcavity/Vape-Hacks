@@ -24,5 +24,5 @@ Datasheet V1.8, section 5.3.18, Table 5-28 "Built-in reference voltage character
 
 **Discrepancy.** The upstream notes quote the spec range as 1.14 to 1.28 V.[^upstream-notes] The datasheet we
 have says 1.17 to 1.23 V. Use the datasheet figure; for an in-spec chip, a fixed 1200 mV constant is therefore at most about 2.5 % off,
-and 100 ppm/°C over a 40 °C swing adds only about 0.4 %. Our `lb_power_policy.h` comment and the Lightning Bugs README repeated the upstream figure until 2026-11-19; both now state the datasheet range and note that upstream may have measured something different on their own chip. How this feeds the battery reading is in
+and 100 ppm/°C over a 40 °C swing adds only about 0.4 %. Our (now removed) `lb_power_policy.h` comment and the Lightning Bugs README repeated the upstream figure until 2026-11-19; both now state the datasheet range and note that upstream may have measured something different on their own chip. How this feeds the battery reading is in
 [Battery voltage and percentage](../firmware/battery-measurement.md).

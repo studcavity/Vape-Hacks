@@ -6,3 +6,5 @@
 * [SWD recovery plan and what is built](swd-recovery-plan.md) - Planned mitigations for losing SWD (watchdog, self-healing check, forced reset, canary process) with which parts exist today.
 * [Running the tests](testing.md) - How to run the hardware-free test suites and linters, what each layer covers, and what is not covered.
 * [Wiring a Pico debug probe to the unit over USB-C](swd-wiring.md) - How SWD reaches the MCU through the USB-C CC pins, the Pico wiring, resistors, and why the unit is unreachable while asleep.
+* [Unit: orange fucking fab](unit-orange-fab.md) - What we have observed about the canary unit nicknamed orange fucking fab: its DPIDR, SWD connect windows, flash dump hash, and that no tool gates on the chip ID.
+* [Unit: Peach Jam](unit-peach-jam.md) - The unit nicknamed Peach Jam: the SHA-256 of its flash dump, and its DPIDR and UID.

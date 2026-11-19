@@ -52,7 +52,7 @@ UNKNOWN_FRAME_BYTES = 32        # a callee with neither source nor disassembly: 
 # build fails when a listed handler does not exist, not when an unlisted one appears: review this
 # list whenever lightning_bugs.ino or lb_sync.h gains an attachInterrupt / peripheral interrupt).
 INTERRUPT_GROUPS = {
-    "exti (switch and USB wake)": ("EXTI0_1_IRQHandler", "EXTI2_3_IRQHandler", "EXTI4_15_IRQHandler"),
+    "exti (switch wake)": ("EXTI0_1_IRQHandler", "EXTI2_3_IRQHandler", "EXTI4_15_IRQHandler"),
     "systick": ("SysTick_Handler",),
 }
 

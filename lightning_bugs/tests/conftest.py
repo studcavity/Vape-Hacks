@@ -56,5 +56,5 @@ def fakebin(tmp_path, monkeypatch):
 def tree(tmp_path):
     """A scratch copy of lightning_bugs/ (so lb_flash's ROOT, build/ and .lb_canary.json are isolated)."""
     dst = tmp_path / "lb"
-    shutil.copytree(LB, dst, ignore=shutil.ignore_patterns(".venv", "build", "__pycache__", "tests"))
+    shutil.copytree(LB, dst, ignore=shutil.ignore_patterns(".venv", "build", "backups", ".lb_canary.json", "__pycache__", "tests"))
     return dst
