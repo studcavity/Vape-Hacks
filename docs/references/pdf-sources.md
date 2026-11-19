@@ -23,6 +23,10 @@ pdftotext -layout "<pdf>" /tmp/rm.txt      # poppler-utils; page breaks are form
 grep -n "UID" /tmp/rm.txt
 ```
 
+`pdftotext` comes from the `poppler-utils` package. Sandboxes launched after the deps-file change merges have it
+pre-installed (it is listed under `apt:` in `claude_sandbox_deps.yaml`); until then, or on your own machine, install it
+with `sudo apt install poppler-utils`.
+
 Pages are separated by form feed characters, so the page of a hit is the count of form feeds before it. The manual's printed footer `n/442` equals the PDF page.
 
 **Rule:** each time a detail is learned from a PDF, write a small `Datasheet Finding` concept in this directory
