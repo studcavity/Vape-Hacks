@@ -30,6 +30,12 @@ measurement on this board**; confirm it on the canary.
   polarity is unconfirmed (see [pin map](../hardware/pin-map.md)).
 - `power_state` bit 0 (low-battery latched) stays in the wire format but is always 0.
 
+**Checked on the canary** ([orange fucking fab](../tooling/unit-orange-fab.md), firmware 0.5.1, 2026-11-19): the off pole stops the blinking, a move to the middle or on position wakes it, and
+`wake_count` matched the number of sleeps. **Not yet checked:** that STOP really stops the clock, the sleep current, and the `millis()` rate after a wake. The probe
+cannot show these, because pyocd sets `DBG_STOP` on every connection and with it set the clocks keep running in STOP. The clean test: disconnect the battery to clear `DBG_STOP`,
+wait out the 3 s boot guard, move the switch to the off pole **without attaching the probe**, wait about 60 s, move it back, then attach and read the tick. A tick far below the wall time
+since the battery was reconnected means STOP stopped `millis()`; a meter on the battery lead during the wait gives the sleep current.
+
 ## Shelved: automatic low-battery sleep
 
 Built, tested natively and then removed, to avoid the ambiguity it depended on (PF0's polarity, STOP wake behaviour on a

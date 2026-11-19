@@ -61,4 +61,18 @@ had no sleep and published PA2 and PA3 readings; the results are in [the mode sw
 build, not its original firmware (the original is the dump above). `flash` needs the venv's `pyocd` on `PATH`
 (`PATH=.venv/bin:$PATH`); without it the command stops before touching the unit.[^flash-tool]
 
+**Flashed 0.5.1 (2026-11-19):** firmware 0.5.1 (build `160f2e79`, binary hash `a386a9341d7c`), the real firmware with the
+switch-off sleep, over the diagnostic build, with the switch in the middle position. SWD stayed reachable in the guard, after the guard and 30 s later.[^flash-tool]
+
+What the user saw (and `status` confirmed with `woken from sleep 2x since boot`): moving the switch to the middle or on positions restarts the
+"unsynced" blink at once with a new cadence; moving it to the off pole stops the blinking; moving it back starts it again. So the off
+pole blanks the LEDs, a move off it wakes the unit, and PA2's edge works as a wake source after the analog read.
+
+**Not shown:** real STOP behaviour. `DBG_STOP` is set (every pyocd connection sets it again), so clocks may keep running and the tick counter cannot
+prove sleep (it ran continuously through a logged sleep). Not measured: sleep current, the `millis()` rate after a wake, and whether the unit
+stays reachable over SWD while asleep: with the unit apparently asleep the raw SWD debug port answered but full connects failed ("Unexpected ACK 5", an invalid coresight
+ROM read), which is what a stopped bus clock would look like. A run of four failed connects while the user said the switch was at "on" is unexplained: the connects worked at
+the middle position and again afterwards at "on". A clean test (battery disconnect, no probe during the sleep, read the tick after the wake) is described in
+[the power policy](../lightning-bugs/power-policy.md).
+
 [^flash-tool]: lb_flash.py (watch and dump)
