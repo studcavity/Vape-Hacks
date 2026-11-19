@@ -22,3 +22,7 @@ Probably none with the Puya pack, since the generic CMSIS-pack target has no unl
 # Fix
 
 Pass `-O auto_unlock=false` to both subprocess calls, and test that it is present.
+
+# Resolution
+
+Fixed on branch `sbx/jolly-shannon/02-review-doc-and-fixes`: `lb_flash.py` passes `-O auto_unlock=false` (`NO_UNLOCK`) to both the `pyocd flash` and `pyocd reset` subprocesses. Test: `test_pyocd_subprocesses_are_told_not_to_auto_unlock` parses the recorded arguments with pyocd's own option parser and fails without the change. `pyocd flash` still halts the core on connect (its default connect mode); only unlocking is disabled.

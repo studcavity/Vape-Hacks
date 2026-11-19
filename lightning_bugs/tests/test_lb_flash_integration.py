@@ -186,6 +186,16 @@ def test_sealed_flash_prompts_and_aborts_unless_confirmed(flasher, monkeypatch):
     assert len(pyocd_calls(flasher, "flash")) == 2
 
 
+def test_pyocd_subprocesses_are_told_not_to_auto_unlock(flasher):
+    """pyocd defaults to auto_unlock=True; lb_flash promises the flash step never mass-erases."""
+    from pyocd.utility.cmdline import convert_session_options
+    flasher(canary=True)
+    for sub in ("flash", "reset"):
+        (call,) = pyocd_calls(flasher, sub)
+        opts = [call[i + 1] for i, a in enumerate(call) if a == "-O"]
+        assert convert_session_options(opts).get("auto_unlock") is False, call
+
+
 def test_probe_id_is_passed_to_pyocd(flasher):
     flasher(canary=True, probe="ABC123")
     (flash,) = pyocd_calls(flasher, "flash")

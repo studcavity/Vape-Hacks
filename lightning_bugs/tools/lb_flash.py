@@ -51,6 +51,9 @@ FLASH_BASE = 0x0800_0000
 FLASH_SIZE = 64 * 1024           # PY32F030x8; override with `dump --size`
 DUMP_DIR = ROOT / "backups"      # git-ignored (*.bin); copy dumps somewhere durable
 DUMP_CHUNK = 1024
+# pyocd's own default is auto_unlock=True. lb_sync.open_session turns it off for every attach session; the
+# `pyocd flash` / `pyocd reset` subprocesses must too, or "never mass-erases" would rest on the Puya pack's good manners.
+NO_UNLOCK = ["-O", "auto_unlock=false"]
 
 ALLOW = "lb-allow-swd-risk"   # put in a comment on the same line to waive a rule
 
@@ -312,14 +315,14 @@ def cmd_flash(args) -> None:
         # cannot tell "never connected" from "failed halfway").
         poll_until(lambda: with_target(args, lambda target: target.read32(FLASH_BASE), "the chip"), args.wait)
     probe = ["-u", args.probe] if args.probe else []
-    cmd = [pyocd, "flash", "-t", args.target, "-f", str(args.frequency), *probe,
+    cmd = [pyocd, "flash", "-t", args.target, "-f", str(args.frequency), *probe, *NO_UNLOCK,
            "--base-address", "0x08000000", str(binf)]
     log("$ " + " ".join(cmd))
     if subprocess.run(cmd).returncode:
         raise Fail("pyocd flash failed")
 
     log("Resetting and verifying SWD stays reachable...")
-    subprocess.run([pyocd, "reset", "-t", args.target, "-f", str(args.frequency), *probe])
+    subprocess.run([pyocd, "reset", "-t", args.target, "-f", str(args.frequency), *probe, *NO_UNLOCK])
     time.sleep(0.5)
     verify_retry(args, "boot guard", 5)           # guard holds the chip for 3 s
     time.sleep(4)
