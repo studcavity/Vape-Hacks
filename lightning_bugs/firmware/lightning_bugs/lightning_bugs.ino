@@ -87,10 +87,14 @@ static inline void clearFrame() { memset(frame, 0, sizeof frame); }
 // PA15 drives a PNP high-side switch for the LED driver: LOW = powered.
 static void ledPower(bool on) { digitalWrite(PA15, on ? LOW : HIGH); }
 
+// Set when a show was cut short (a resync moved the grid) and the driver was left powered, showing its last frame.
+static bool ledsLeftLit = false;
+
 static void ledsDark() {                  // blank the driver, then cut its power
     clearFrame();
     sendFrame();
     ledPower(false);
+    ledsLeftLit = false;
 }
 
 // ─── Low-battery sleep ───────────────────────────────────────────────────────
@@ -261,6 +265,7 @@ void loop() {
     int64_t showUs = (int64_t)SHOW_FRAMES * SHOW_STEP_MS * 1000;
 
     if (now - start >= showUs) {                         // between shows: wait for the next one
+        if (ledsLeftLit) ledsDark();                     // a resync cut the last show short: do not wait lit for up to a period
         start = lbBeatTime(n + 1);
         waitSeq = lbS.seq;
         // Wake the LED driver shortly before the show. A resync that moves the
@@ -273,4 +278,5 @@ void loop() {
         ledPower(true);                                  // joined mid-show
     }
     if (playShow(start)) ledsDark();                     // not after a resync: keep going on the new grid
+    else ledsLeftLit = true;                             // ... unless the new grid has no show now (see above)
 }

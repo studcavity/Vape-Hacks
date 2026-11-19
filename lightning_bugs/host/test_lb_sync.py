@@ -269,6 +269,25 @@ class ResyncTests(unittest.TestCase):
         self.assertEqual(dev.read_block().period_us, 60_000_000)
         self.assertLess(abs(true_offset_ms(dev, tgt, clock)), 1.5)
 
+    def test_fallback_after_boot_refuses_to_guess_the_grid(self):
+        """A just-booted unit holds the firmware's 0.5 s default grid; reusing it would play a show every beat."""
+        clock, tgt, dev = self.make(0)
+        t0 = clock.t_ns
+        with self.assertRaises(lb.SyncError) as cm:
+            self.quiet(dev)
+        self.assertIn("--every", str(cm.exception))
+        self.assertLess((clock.t_ns - t0) / 1e9, 1, "must refuse before sampling for minutes")
+        self.assertEqual(dev.read_block().seq, 0, "nothing may be written")
+
+    def test_fallback_after_sleep_wake_keeps_the_grid_it_still_holds(self):
+        """Low-battery STOP voids the sync (ack cleared) but RAM keeps the real grid."""
+        clock, tgt, dev = self.make(0, seed=8)
+        lb.cmd_sync(dev, sync_args(duration=60, every=3600.0, epoch=7.0), log=lambda *a: None)
+        tgt.ram[BLOCK_ADDR + 4 * lb.W["ack_seq"]] = 0
+        self.quiet(dev, full_duration=60)
+        blk = dev.read_block()
+        self.assertEqual((blk.period_us, blk.epoch_us), (3_600_000_000, 7_000_000))
+
     def test_no_fallback_refuses_unsynced(self):
         _, _, dev = self.make(0)
         with self.assertRaises(lb.SyncError):

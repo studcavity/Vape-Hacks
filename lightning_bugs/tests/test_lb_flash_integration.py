@@ -186,6 +186,16 @@ def test_sealed_flash_prompts_and_aborts_unless_confirmed(flasher, monkeypatch):
     assert len(pyocd_calls(flasher, "flash")) == 2
 
 
+def test_pyocd_subprocesses_are_told_not_to_auto_unlock(flasher):
+    """pyocd defaults to auto_unlock=True; lb_flash promises the flash step never mass-erases."""
+    from pyocd.utility.cmdline import convert_session_options
+    flasher(canary=True)
+    for sub in ("flash", "reset"):
+        (call,) = pyocd_calls(flasher, sub)
+        opts = [call[i + 1] for i, a in enumerate(call) if a == "-O"]
+        assert convert_session_options(opts).get("auto_unlock") is False, call
+
+
 def test_probe_id_is_passed_to_pyocd(flasher):
     flasher(canary=True, probe="ABC123")
     (flash,) = pyocd_calls(flasher, "flash")
@@ -718,3 +728,74 @@ def test_flash_wait_comes_after_the_sealed_unit_prompt(waiter, monkeypatch):
 def test_flash_wait_flag_in_the_cli(tree):
     r = cli(tree, "flash", "--help")
     assert r.returncode == 0 and "--wait" in r.stdout
+
+
+# ─── the unit must run what was flashed ──────────────────────────────────────
+def _bin_with_header(build=0xA13CCFF2, fw=(0, 4, 0), flags=0):
+    import struct
+    import lb_sync
+    layout = lb_catalog_layout()
+    w = [0] * layout.words
+    w[0], w[1], w[2], w[3] = lb_sync.MAGIC0, lb_sync.MAGIC1, 4 << 16, layout.words
+    w[4], w[5], w[6], w[7] = fw[0] << 16 | fw[1] << 8 | fw[2], build, flags, 0x200002F8
+    return struct.pack("<%dI" % len(w), *w)
+
+
+def _running(monkeypatch, **kw):
+    """Make every post-flash reconnect report a unit running the build described by kw."""
+    import lb_sync
+    hdr = lb_sync.parse_header(list(struct_unpack(_bin_with_header(**kw))[:lb_sync.HEADER_WORDS]))
+    monkeypatch.setattr(lb_flash, "verify_connect", lambda args, label: hdr)
+
+
+def struct_unpack(blob):
+    import struct
+    return struct.unpack("<%dI" % (len(blob) // 4), blob)
+
+
+def test_flash_passes_when_the_unit_runs_the_flashed_build(flasher, monkeypatch):
+    monkeypatch.setenv("FAKE_BIN_HEX", _bin_with_header().hex())
+    _running(monkeypatch)
+    flasher(canary=True)
+    assert (flasher.tree / ".lb_canary.json").exists()
+
+
+def test_flash_fails_when_the_old_firmware_is_still_running(flasher, monkeypatch):
+    monkeypatch.setenv("FAKE_BIN_HEX", _bin_with_header(build=0xA13CCFF2).hex())
+    _running(monkeypatch, build=0x0BADF00D)                    # the unit still reports an older commit
+    with pytest.raises(lb_flash.Fail, match="not running the build that was flashed"):
+        flasher(canary=True)
+    assert not (flasher.tree / ".lb_canary.json").exists()
+
+
+def test_flash_fails_on_a_different_firmware_version(flasher, monkeypatch):
+    monkeypatch.setenv("FAKE_BIN_HEX", _bin_with_header(fw=(0, 5, 0)).hex())
+    _running(monkeypatch, fw=(0, 4, 0))
+    with pytest.raises(lb_flash.Fail, match="firmware version"):
+        flasher(canary=True)
+
+
+def test_bin_built_from_another_commit_is_refused(flasher, tmp_path, monkeypatch):
+    other = tmp_path / "other.bin"
+    other.write_bytes(_bin_with_header(build=0x11111111))
+    monkeypatch.setattr(lb_flash, "build_stamp", lambda: (0x22222222, False))
+    with pytest.raises(lb_flash.Fail, match="was built from commit 11111111"):
+        flasher(canary=True, bin=str(other))
+    assert not pyocd_calls(flasher, "flash")
+
+
+def test_bin_built_from_the_checked_out_commit_is_accepted(flasher, tmp_path, monkeypatch):
+    mine = tmp_path / "mine.bin"
+    mine.write_bytes(_bin_with_header(build=0x22222222))
+    monkeypatch.setattr(lb_flash, "build_stamp", lambda: (0x22222222, False))
+    flasher(canary=True, bin=str(mine))
+    assert len(pyocd_calls(flasher, "flash")) == 1
+
+
+def test_bin_symbol_check_uses_the_sibling_elf(flasher, tmp_path, monkeypatch):
+    (tmp_path / "x.bin").write_bytes(b"\x01\x02\x03\x04")
+    (tmp_path / "x.elf").write_bytes(b"\x7fELF")
+    seen = []
+    monkeypatch.setattr(lb_flash, "check_binary", lambda elf, binf: seen.append(elf) or [])
+    flasher(canary=True, bin=str(tmp_path / "x.bin"))
+    assert seen == [tmp_path / "x.elf"]
