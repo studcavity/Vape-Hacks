@@ -82,4 +82,13 @@ ROM read), which is what a stopped bus clock would look like. A run of four fail
 the middle position and again afterwards at "on". A clean test (battery disconnect, no probe during the sleep, read the tick after the wake) is described in
 [the power policy](../lightning-bugs/power-policy.md).
 
+**Tool checks on this unit (2026-11-19, firmware 0.5.1):** the following ran on the real unit or build and worked as described, with no bugs found.[^flash-tool]
+- `lb_stack.py` on the real build: worst case 464 B of the 768 B stack budget (thread mode 296 B; EXTI 88 B; SysTick 80 B).
+- `lb_flash.py check` on a scratch copy of the sketch with one forbidden line added: refused for a PA13 pin mode, a GPIOA `MODER` write, an RCC `CFGR` write, a flash key
+  register write, a `DBGMCU` write, the low-power and deep-sleep bits together, and a standby call (7 of 7), and passed the same line with the `lb-allow-swd-risk` waiver and the clean copy.
+- `lb_flash.py flash --yes` in a scratch copy with no canary record: built, then refused with "this build has not passed on a canary", wrote no record and did not touch the unit.
+- `lb_sync.py sync --duration 60 --every 30`: seq 2, rate correction +1807 ppm (this chip's clock ran about 0.18 % slow), residual 0.57 ms RMS, probe round trip about 0.5 ms.
+- `status` afterwards: offset -1.5 ms (±0.3). Two `resync` runs: drift -2.5 ms since the last sync each time, previous rate kept (under 600 s since the last sync).
+- `report`: "no usable visits yet", because every logged visit was a first sync or had a baseline under 600 s. It needs `resync` visits at least 10 minutes apart.
+
 [^flash-tool]: lb_flash.py (watch and dump)
