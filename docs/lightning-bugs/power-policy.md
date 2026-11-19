@@ -3,7 +3,7 @@ type: Policy
 title: "Lightning Bugs low-battery policy"
 description: "When the firmware stops showing and sleeps to protect the unprotected cell: thresholds, confirmation, wake window and USB handling."
 tags: [lightning-bugs, battery, sleep, policy]
-generated: { by: "claude-code/claude-sonnet-5-5", at: "2026-11-19T03:30:00Z" }
+generated: { by: "claude-code/claude-sonnet-5-5", at: "2026-11-19T03:24:28Z" }
 sources:
   - id: header
     resource: https://github.com/studcavity/Vape-Hacks/blob/main/lightning_bugs/firmware/lightning_bugs/lb_power_policy.h
@@ -33,9 +33,10 @@ Behaviour:[^lb-readme]
 - With USB present and supply above 3400 mV it runs normally. Below that it sleeps regardless, which also covers a wrong guess about PF0's polarity.
 - STOP freezes `millis()`, so a unit that has slept is **unsynced** and needs a full `sync` after charging.
 
-**Caveat.** The firmware comments and README treat Vrefint as "±6 % (1.14 to 1.28 V)", copied from the upstream
-notes. The datasheet gives 1.17 to 1.23 V ([Vrefint](../references/ds-vrefint.md)), so the margin is tighter than stated; the
-thresholds are therefore conservative, not wrong. The README's pre-flash checks on the canary (USB input follows plugging) apply to PF0 in the [pin map](../hardware/pin-map.md).
+**Vrefint range.** The firmware comment and README used to say "±6 % (1.14 to 1.28 V)", copied from the upstream
+notes. They now use the datasheet's 1.17 to 1.23 V (about ±2.5 %; [Vrefint](../references/ds-vrefint.md)), so a 3.60 V reading
+means 3.5 to 3.7 V. The thresholds were not changed, since they are conservative either way. The README's pre-flash
+checks on the canary (USB input follows plugging) apply to PF0 in the [pin map](../hardware/pin-map.md).
 
 [^header]: lb_power_policy.h (pure C policy logic)
 [^lb-readme]: Lightning Bugs README

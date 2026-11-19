@@ -8,9 +8,14 @@
  *
  * The cell has no discharge protection that we have found, and MCU VDD is the
  * cell, so the supply voltage seen through VREFINT *is* the battery voltage.
- * VREFINT is only specified to +/-6 % (1.14-1.28 V), so a "3.60 V" reading can
- * be 3.4-3.8 V. The thresholds leave room for that: the cell is not at risk
- * until about 3.0 V.
+ * NOTE on the VREFINT range: the upstream Jam project's notes quote 1.14-1.28 V
+ * (+/-6 %). That may be something they measured or assumed on their own chip;
+ * it is NOT what the vendor specifies. The range used here comes from the
+ * PY32F030 datasheet V1.8, section 5.3.18, Table 5-28 (PDF page 67): VREFINT is
+ * 1.17 V min, 1.2 V typ, 1.23 V max (about +/-2.5 %). See
+ * docs/references/ds-vrefint.md.
+ * So a "3.60 V" reading can be 3.5-3.7 V. The thresholds leave room for that:
+ * the cell is not at risk until about 3.0 V.
  *
  * Rules
  *   - A reading counts only when the LEDs are off (LED load sags the cell).
