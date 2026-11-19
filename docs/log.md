@@ -1,5 +1,6 @@
 ## 2026-11-19
 
+- Flashed the diagnostic build to the canary and recorded the switch readings in `hardware/mode-switch.md`: GND, middle and VDDA bands, PA3 inert, and two spurious PA2 edges per analog read at VDDA (fixed in firmware 0.5.1).
 - Recorded the canary's option bytes in `tooling/unit-orange-fab.md` (same as Peach Jam's; `DBG_STOP` set by the earlier pyocd connections).
 - Added `tooling/unit-peach-jam.md` (the first unit; hash and option bytes from the 2026-11-17 checkpoint, DPIDR not recorded). Orange fucking fab is the canary; its dump hash is recorded, and it differs from the upstream `backup_flash.bin` in 27,697 bytes.
 - Added `tooling/unit-orange-fab.md`: the unit's SWD connect windows and DPIDR from `watch`; recorded that `dump` does not gate on the chip ID.

@@ -20,13 +20,16 @@ int main(int argc, char** argv) {
     if (p == MAP_FAILED) { puts("mmap failed"); return 2; }
     *(volatile uint16_t*)LB_TSCAL1_ADDR = 1400; *(volatile uint16_t*)LB_TSCAL2_ADDR = 1700;
 
-    bool off = argc > 1;                                               // any argument: start at the off pole
-    setSwitch(off ? 5 : 1500, false);
+    bool off = argc > 1 && argv[1][0] == 'o';                          // "off": start at the off pole
+    bool on = argc > 1 && argv[1][0] == 'v';                           // "vdda": the on position, PA2 high
+    setSwitch(off ? 5 : on ? 4093 : 1500, false);
     setup();
     sim.onWfi = hook;
     loop();                                                            // off: sleeps, then returns after the wake
+    if (on) for (int i = 0; i < 4; i++) loop();                        // at VDDA: must not re-read PA2 on every pass
     printf("stop_wfis=%lu released=%d synced=%d wakes=%u\n", sim.stopWfis, released, lbS.synced ? 1 : 0,
            (unsigned)lbBlock.wake_count);
+    printf("pa2_reads=%lu\n", sim.pa2Reads);
     printf("led_power_pin=%d off_after=%d\n", sim.level[PA15], switchIsOff ? 1 : 0);
     return 0;
 }

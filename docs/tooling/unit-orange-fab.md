@@ -55,6 +55,10 @@ freeze registers' defaults: `APB_FZ1` and `APB_FZ2` are 0. DBGMCU `IDCODE` reads
 session connected through pyocd, which sets these bits, and they stay until the battery is disconnected, so this reading does not describe the
 original firmware and a sleep-current measurement taken now would include it.[^flash-tool]
 
-**Not yet done on this unit:** any flash.
+**Flashed 2026-11-19:** a throwaway diagnostic build (firmware 0.5.99, build `402bd7c8`, binary hash `dfb42a9de40d`, never pushed), with
+`flash --canary --bin ... --wait 90`. SWD stayed reachable in the guard, after the guard and 30 s later. The build
+had no sleep and published PA2 and PA3 readings; the results are in [the mode switch note](../hardware/mode-switch.md). The unit now runs that diagnostic
+build, not its original firmware (the original is the dump above). `flash` needs the venv's `pyocd` on `PATH`
+(`PATH=.venv/bin:$PATH`); without it the command stops before touching the unit.[^flash-tool]
 
 [^flash-tool]: lb_flash.py (watch and dump)

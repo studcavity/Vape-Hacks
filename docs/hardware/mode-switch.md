@@ -29,6 +29,21 @@ Because position 1 pulls PA2 to ground, any voltage formula that uses PA2 reads 
 
 **Disagreement to resolve.** The two upstream files name the positions differently. The context notes call them sleep (1), active animations (2) and battery display (3). The README calls them "Close" low-power with button-triggered animation and battery readout on hold (1), animation select (2) and counter (3).[^upstream-readme] The ADC bands are the same in both; verify the behaviour on a unit before relying on either naming.
 
+**Measured on the canary** ([orange fucking fab](../tooling/unit-orange-fab.md), 2026-11-19, a diagnostic build that sampled PA2 and PA3 and
+counted edge interrupts; the log was read over SWD while the switch was moved):
+
+| Position | PA2 ADC | PA2 digital level | Spurious edges from our own analog-to-digital flip |
+|---|---|---|---|
+| shorted to GND | 0 to 1 | low | none |
+| middle | 372, 532 and 882 in three visits | low | none seen |
+| at VDDA | 4093 to 4094 | high | about 2 per sample |
+
+- The three bands match upstream's (below 20, above 2000, in between). The middle value is not stable, so treat it as "neither of the others".
+- The user called the VDDA position "on"; the GND position was the one reached by moving to "off". Which of the two end positions is physically left or right was not recorded.
+- **PA3 did not follow the switch**: 0 counts, level low and no edges in every position.
+- A real move off GND produced edge interrupts (GND to middle gave 1 to 2, middle to VDDA and VDDA to GND 1 each), so PA2 can be a wake source.
+- With PA2 at VDDA, `analogRead` followed by `pinMode(PA2, INPUT)` raises two edges by itself. Firmware that treats every PA2 edge as a switch move must ignore edges during its own read (fixed in firmware 0.5.1, `adcBusy`).
+
 The slide switch does **not** cut power to the MCU, so moving it is not a reset.[^lb-swd]
 
 [^upstream-notes]: Upstream project context notes (project_geekbar_pls916h.md)

@@ -39,6 +39,8 @@ struct Sim {
     void (*onWfi)() = nullptr;              // called after every simulated 1 ms tick
     unsigned long wfiCalls = 0;
     unsigned long stopWfis = 0;             // WFIs entered with SLEEPDEEP set (STOP)
+    void (*pa2Isr)() = nullptr;             // handler attached to PA2's edge interrupt
+    unsigned long pa2Reads = 0;             // analogRead(PA2) calls
     uint32_t pa2Adc = 1500;                 // what analogRead(PA2) returns: <20 GND, >2000 VDDA, else mid-rail
 };
 inline Sim sim;
@@ -50,11 +52,16 @@ inline void __enable_irq() {}
 inline uint32_t millis() { return uwTick; }
 inline void delay(uint32_t ms) { while (ms--) tick(); }
 inline void delayMicroseconds(uint32_t) {}
-inline void pinMode(int, int) {}
+// Measured on the canary: with PA2 at VDDA each analog->digital flip makes two edges by itself (none at GND).
+inline void pa2FlipEdges() { if (sim.level[PA2] == HIGH && sim.pa2Isr) { sim.pa2Isr(); sim.pa2Isr(); } }
+inline void pinMode(int pin, int mode) { if (pin == PA2 && mode == INPUT) pa2FlipEdges(); }
 inline void digitalWrite(int pin, int v) { sim.level[pin] = v; }
 inline int digitalRead(int pin) { return sim.level[pin]; }
 inline int digitalPinToInterrupt(int pin) { return pin; }
-inline void attachInterrupt(int, void (*)(), int) {}
-inline void detachInterrupt(int) {}
+inline void attachInterrupt(int pin, void (*h)(), int) { if (pin == PA2) sim.pa2Isr = h; }
+inline void detachInterrupt(int pin) { if (pin == PA2) sim.pa2Isr = nullptr; }
 inline void analogReadResolution(int) {}
-inline uint32_t analogRead(uint32_t ch) { return ch == AVREF ? 1260 : ch == PA2 ? sim.pa2Adc : 1500; }   // VREFINT 1.2 V -> supply 3.9 V
+inline uint32_t analogRead(uint32_t ch) {
+    if (ch == PA2) { sim.pa2Reads++; return sim.pa2Adc; }
+    return ch == AVREF ? 1260 : 1500;
+}   // VREFINT 1.2 V -> supply 3.9 V

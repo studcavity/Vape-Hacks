@@ -57,3 +57,11 @@ def test_switch_not_at_off_pole_does_not_enter_stop(switch_exe):
     r = switch_exe()
     assert r["stop_wfis"] == "0" and r["released"] == "0"
 
+
+
+def test_switch_at_vdda_does_not_make_the_loop_re_read_the_switch_every_pass(switch_exe):
+    """Measured on the canary: at VDDA each analog->digital flip raises two edges by itself. They must not count as
+    switch moves, or every loop pass would re-read PA2 and abandon its wait."""
+    r = switch_exe("vdda")
+    assert r["pa2_reads"] == "1", f"one read at boot, none after; got {r['pa2_reads']}"
+    assert r["stop_wfis"] == "0"

@@ -101,7 +101,8 @@ static void ledsDark() {                  // blank the driver, then cut its powe
 static volatile bool wakeFlag = false;
 static volatile bool switchChanged = true;        // PA2 moved (or boot): re-read the switch before the next decision
 static bool          switchIsOff = false;
-static void onSwitchWake() { wakeFlag = true; switchChanged = true; }
+static volatile bool adcBusy = false;              // our own analogRead of PA2 is in progress: its edges are not the switch
+static void onSwitchWake() { if (adcBusy) return; wakeFlag = true; switchChanged = true; }
 
 static void attachSwitchWake() { attachInterrupt(digitalPinToInterrupt(PA2), onSwitchWake, CHANGE); }
 
@@ -126,13 +127,19 @@ static void enterStopUntilWake() {
 // True if the slide switch has stayed at its off pole (PA2 at GND) for LB_SWITCH_OFF_CONFIRM
 // samples. analogRead() puts PA2 in analog mode, where the digital edge cannot fire, so the pin is
 // put back to a digital input afterwards: nothing may sleep with PA2 left analog.
+// Measured on the canary (2026-11-19): with PA2 at VDDA (the "on" position) every analog-to-digital flip
+// raises about two edge interrupts by itself (none at GND), so those edges are ignored (adcBusy), or the
+// loop would see a "switch move" after every read and never wait for a show.
 static bool switchAtOffPole() {
     bool off = true;
+    adcBusy = true;
     for (uint8_t i = 0; i < LB_SWITCH_OFF_CONFIRM && off; i++) {
         off = lbSwitchIsOff(analogRead(PA2));
         if (off) delay(5);
     }
     pinMode(PA2, INPUT);
+    delayMicroseconds(100);                                       // let the flip's own edges run (and be ignored)
+    adcBusy = false;
     return off;
 }
 
