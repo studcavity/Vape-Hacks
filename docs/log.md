@@ -1,5 +1,6 @@
 ## 2026-11-19
 
+- Took a second dump of Peach Jam: upstream image except 5 bytes in the `0xF000` page (likely counters), so its hash differs from the first dump's; corrected the offset of the second differing value to `0xF010`.
 - Compared the canary's original firmware with the upstream `backup_flash.bin`: a smaller build (about 2.3 KB less code) with the same stack pointer and reset vector; details in `tooling/unit-orange-fab.md`.
 - Read Peach Jam's DPIDR and UID: DPIDR `0x0BC11477`, same as the canary; changed `lb_flash.py`'s expected value to match.
 - Flashed firmware 0.5.1 to the canary; recorded what the switch-off sleep shows so far (logic works, STOP itself not yet verified) in `tooling/unit-orange-fab.md` and `lightning-bugs/power-policy.md`.

@@ -49,9 +49,9 @@ checkpoint records it as identical to the upstream file except 5 bytes):[^flash-
   mostly (662 blocks) displaced by `+0x7D4` bytes (about 2 KB later in upstream). So the two share much of their code, laid out differently, and upstream has about 2 KB extra before it. The simplest reading
   is two different builds (releases) of the same stock firmware, not a one-off corruption. That is an interpretation of the bytes; no source for the stock firmware exists to confirm it.
 - Initial stack pointer (`0x20000A78`) and reset vector (`0x080000D9`) agree, but most other vectors differ by their low address bytes, as a re-linked build would.
-- The 5 differing bytes in the `0xF000` page are two small records framed by `aa55aa55`: a value at `0xF004` (upstream `0x001FECE8`, orange `0x0040C583`) and one at `0xF00C`
-  (upstream `0x0A97`, orange `0x1DAD`). The surrounding `0x12345678` constants are identical. These look like per-unit data such as counters; that is a guess.
-- Peach Jam's matching the upstream image (per the checkpoint) while orange does not suggests the units come from different production batches. Their DPIDR and option bytes agree.
+- The 5 differing bytes in the `0xF000` page are two small records framed by `aa55aa55`: a value at `0xF004` (upstream `0x001FECE8`, orange `0x0040C583`) and one at `0xF010`
+  (upstream `0x0A97`, orange `0x1DAD`). (An earlier version of this note wrongly gave `0xF00C` for the second.) The surrounding `0x12345678` constants are identical. These look like per-unit data such as counters; that is a guess.
+- Peach Jam's code matches the upstream image (dump of 2026-11-19, see its note) while orange's does not, which suggests the units come from different production batches. Their DPIDR and option bytes agree.
 
 **Option bytes** (2026-11-19, `options --poll --timeout 60`, connected on attempt 35): identical to Peach Jam's.[^flash-tool]
 User word `0x0155FEAA` valid, SDK word `0xFF0000FF`, write-protect word `0x0000FFFF` (none of the 16 sectors protected), RDP `0xAA` (level 0, no read
