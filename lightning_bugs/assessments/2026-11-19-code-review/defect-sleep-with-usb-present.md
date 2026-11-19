@@ -3,11 +3,10 @@ type: Defect
 title: Unit can enter STOP while USB power is present
 description: USB wake is rising-edge only and enterStopUntilWake clears the wake flag first, so an edge just before sleep is lost.
 tags: [firmware,power]
-status: draft
-confidence: read from code
-generated: { by: claude-code/claude-sonnet-5-5, at: 2026-11-19T00:23:42Z }
+confidence: read from code; re-read on 2026-11-19 and still present
+generated: { by: "claude-code/claude-sonnet-5-5", at: "2026-11-19T03:18:47Z" }
 sources:
-  - resource: ../../firmware/lightning_bugs/lightning_bugs.ino
+  - resource: https://github.com/studcavity/Vape-Hacks/blob/main/lightning_bugs/firmware/lightning_bugs/lightning_bugs.ino
 ---
 
 # Problem
@@ -21,3 +20,7 @@ The unit sleeps in STOP while a charger is connected and does not notice chargin
 # Fix
 
 Check `lbUsbPresent()` just before entering STOP, and skip the sleep when it is high.
+
+# Status
+
+**Open.** Re-checked against the code on 2026-11-19: not fixed.

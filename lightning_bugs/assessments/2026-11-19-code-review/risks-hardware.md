@@ -5,12 +5,12 @@ description: Unverified assumptions in the firmware, namely power use, STOP wake
 tags: [firmware,hardware,power]
 status: draft
 confidence: unverified
-generated: { by: claude-code/claude-sonnet-5-5, at: 2026-11-19T00:23:42Z }
+generated: { by: "claude-code/claude-sonnet-5-5", at: "2026-11-19T00:23:42Z" }
 sources:
-  - resource: ../../firmware/lightning_bugs/lightning_bugs.ino
-  - resource: ../../firmware/lightning_bugs/lb_sync.h
-  - resource: ../2026-11-17-session-checkpoint.md
-  - resource: ../swd-recovery.md
+  - resource: https://github.com/studcavity/Vape-Hacks/blob/main/lightning_bugs/firmware/lightning_bugs/lightning_bugs.ino
+  - resource: https://github.com/studcavity/Vape-Hacks/blob/main/lightning_bugs/firmware/lightning_bugs/lb_sync.h
+  - resource: https://github.com/studcavity/Vape-Hacks/blob/main/lightning_bugs/assessments/2026-11-17-session-checkpoint.md
+  - resource: https://github.com/studcavity/Vape-Hacks/blob/main/lightning_bugs/assessments/swd-recovery.md
 ---
 
 # Debug bits survive resets
@@ -28,7 +28,7 @@ Nobody has confirmed that the clock and `millis()` rate are unchanged after a ST
 # Unverified chip assumptions
 
 - `analogRead(ATEMP)` and `analogRead(AVREF)` return sensible counts.
-- The battery voltage derived from a nominal 1.2 V VREFINT is accurate (the header admits ±6 %).
+- The battery voltage derived from a nominal 1.2 V VREFINT is accurate (the header used to claim ±6 %; the datasheet says 1.17 to 1.23 V, about ±2.5 %, and the header was corrected on 2026-11-19).
 - `TS_CAL1` and `TS_CAL2` sit at the cited addresses.
 - `uwTick` is the counter behind `millis()`.
 - The LED driver accepts a frame immediately after `ledPower(true)` in `unsyncedBlink`, `lowBatteryBlink` and the mid-show join. Only the pre-show path has `LED_WAKE_LEAD_MS`.

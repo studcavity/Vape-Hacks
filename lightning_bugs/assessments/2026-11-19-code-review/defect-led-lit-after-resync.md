@@ -3,11 +3,11 @@ type: Defect
 title: LEDs can stay lit after a mid-show resync
 description: playShow returns false without blanking; if the new grid is between shows, the driver stays powered with the last frame showing.
 tags: [firmware,battery]
-status: draft
+status: deprecated
 confidence: read from code
-generated: { by: claude-code/claude-sonnet-5-5, at: 2026-11-19T00:23:42Z }
+generated: { by: "claude-code/claude-sonnet-5-5", at: "2026-11-19T03:18:47Z" }
 sources:
-  - resource: ../../firmware/lightning_bugs/lightning_bugs.ino
+  - resource: https://github.com/studcavity/Vape-Hacks/blob/main/lightning_bugs/firmware/lightning_bugs/lightning_bugs.ino
 ---
 
 # Problem
@@ -23,5 +23,7 @@ The LEDs stay lit on a frozen frame until 100 ms before the next show, up to an 
 Remember that the last show ended without blanking, and blank before waiting. Do not call `ledsDark()` unconditionally: that would clock bits into a driver whose power is cut.
 
 # Resolution
+
+Status: **fixed**, so this concept is deprecated; it is kept as a record of the defect and its fix. Fix confirmed present in the code on 2026-11-19.
 
 Fixed on branch `sbx/jolly-shannon/02-review-doc-and-fixes`: `lightning_bugs.ino` remembers (`ledsLeftLit`) that a show ended without blanking and calls `ledsDark()` before waiting for the next show. `ledsDark()` clears the flag, so a driver that is already unpowered is never clocked. Test: `tests/test_lightning_bugs_sketch.py` compiles the real sketch natively against `tests/fake_arduino/Arduino.h`, cuts a show short with a resync and checks that PA15 stays high for the whole wait (it was low for the entire hour before the fix). This harness also makes the other firmware defects testable.
