@@ -8,6 +8,20 @@ This repository (`studcavity/Vape-Hacks`) is a sandbox fork of the original proj
 - PRs may only target `studcavity/Vape-Hacks`. With `gh`, always pass `--repo studcavity/Vape-Hacks` explicitly; `gh pr create` on a fork can otherwise default to the upstream parent.
 - Never push to, or add as a push remote, any upstream repository.
 
+## Original project folder (`PY*`): never modify
+
+The directory whose name starts with `PY` (`PY32F030EK28 - Geek Bar Pulse X Jam/`) is the original
+upstream project's material, and this repository is a fork.
+
+- **Never modify, delete, move, rename or reformat anything under it.** That covers its README, the
+  `project_*.md` notes, the firmware sources, the PDFs, the flash dumps and the disassembly.
+- Reading it is encouraged. Pull technical details out of it, but write them into our own
+  documentation (`docs/`) with a source reference back to the file, not into the `PY*` folder.
+- The two large PDFs there (the PY32F030 datasheet and reference manual) are too big to read at once.
+  Whenever we learn a detail from one, write a small OKF concept under `docs/` that records what we
+  learned, with a source reference (document, version, section and page) so the detail can be
+  re-checked.
+
 ## Compiled binaries: don't commit them by default
 
 Build outputs (`.elf`, `.hex`, `.map`, `.bin`, `.o`, `build/`) are generated and are not tracked (`*.bin` is git-ignored). Do not `git add` them.
