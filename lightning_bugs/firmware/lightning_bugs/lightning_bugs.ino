@@ -135,11 +135,16 @@ static void enterStopUntilWake() {
 }
 
 static void sleepLowBattery() {
+    bool usbAtDecision = lbUsbPresent();                          // the wake edge is a rise from this level
     ledsDark();                                                   // driver blank and unpowered (PA15 high)
     bool chatter = switchToggles >= LB_MAX_SWITCH_TOGGLES;
     if (chatter) detachInterrupt(digitalPinToInterrupt(PA2));     // USB only until the next USB wake
     switchToggles = 0;
     wakeFlag = false;
+    // USB appeared after the decision to sleep: the rising edge came before the line above cleared its
+    // flag. Count it as the wake. (Already present at the decision, below the floor: sleep anyway; the
+    // charger IC does not need the MCU, and the floor must hold if PF0's polarity was guessed wrong.)
+    if (!usbAtDecision && lbUsbPresent()) wakeFlag = true;
     enterStopUntilWake();
     if (chatter) attachSwitchWake();
     lbBlock.wake_count++;
