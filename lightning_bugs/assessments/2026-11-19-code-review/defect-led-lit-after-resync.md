@@ -21,3 +21,7 @@ The LEDs stay lit on a frozen frame until 100 ms before the next show, up to an 
 # Fix
 
 Remember that the last show ended without blanking, and blank before waiting. Do not call `ledsDark()` unconditionally: that would clock bits into a driver whose power is cut.
+
+# Resolution
+
+Fixed on branch `sbx/jolly-shannon/02-review-doc-and-fixes`: `lightning_bugs.ino` remembers (`ledsLeftLit`) that a show ended without blanking and calls `ledsDark()` before waiting for the next show. `ledsDark()` clears the flag, so a driver that is already unpowered is never clocked. Test: `tests/test_lightning_bugs_sketch.py` compiles the real sketch natively against `tests/fake_arduino/Arduino.h`, cuts a show short with a resync and checks that PA15 stays high for the whole wait (it was low for the entire hour before the fix). This harness also makes the other firmware defects testable.
