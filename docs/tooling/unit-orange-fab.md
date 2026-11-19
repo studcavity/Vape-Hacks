@@ -40,10 +40,18 @@ backup.
 `0x08000000`, two identical reads, SHA-256
 `d78f4a5bee8a927db42392f9d4626ef636b72787cd9a182b8703e461b562687c`. Saved on the sandbox as
 `lightning_bugs/backups/dump_20261119T054158_d78f4a5bee8a.bin` (git-ignored; copy kept by the user, not in the repo).[^flash-tool]
-This is the unit's original firmware, taken before any flashing. Its initial stack pointer (`0x20000A78`) and reset vector
-(`0x080000D9`) match [Peach Jam](unit-peach-jam.md)'s, but it is **not** the same image as the repository's upstream
-`backup_flash.bin`: 27,697 of 65,536 bytes differ (SHA-256 of that file `ca2460e4...fc35`), where Peach Jam's dump is recorded as differing from it
-in 5 bytes. So this unit runs a different firmware build from Peach Jam's.[^flash-tool]
+This is the unit's original firmware, taken before any flashing.
+
+**How it differs from the upstream `backup_flash.bin`** (byte comparison, 2026-11-19; Peach Jam's own dump was not available for a direct comparison, but the
+checkpoint records it as identical to the upstream file except 5 bytes):[^flash-tool]
+- Both images are 65,536 bytes and both leave `0x8000` to `0xEFFF` erased (all `0xFF`). The differences are in the code, `0x0000` to `0x7FFF`, plus the 5 bytes in the `0xF000` page.
+- Orange's code ends at `0x6FCF`, upstream's at `0x78E3`: **orange's build is about 2.3 KB smaller**. Of orange's 16-byte code blocks, 1017 of 1770 occur somewhere in the upstream image,
+  mostly (662 blocks) displaced by `+0x7D4` bytes (about 2 KB later in upstream). So the two share much of their code, laid out differently, and upstream has about 2 KB extra before it. The simplest reading
+  is two different builds (releases) of the same stock firmware, not a one-off corruption. That is an interpretation of the bytes; no source for the stock firmware exists to confirm it.
+- Initial stack pointer (`0x20000A78`) and reset vector (`0x080000D9`) agree, but most other vectors differ by their low address bytes, as a re-linked build would.
+- The 5 differing bytes in the `0xF000` page are two small records framed by `aa55aa55`: a value at `0xF004` (upstream `0x001FECE8`, orange `0x0040C583`) and one at `0xF00C`
+  (upstream `0x0A97`, orange `0x1DAD`). The surrounding `0x12345678` constants are identical. These look like per-unit data such as counters; that is a guess.
+- Peach Jam's matching the upstream image (per the checkpoint) while orange does not suggests the units come from different production batches. Their DPIDR and option bytes agree.
 
 **Option bytes** (2026-11-19, `options --poll --timeout 60`, connected on attempt 35): identical to Peach Jam's.[^flash-tool]
 User word `0x0155FEAA` valid, SDK word `0xFF0000FF`, write-protect word `0x0000FFFF` (none of the 16 sectors protected), RDP `0xAA` (level 0, no read
