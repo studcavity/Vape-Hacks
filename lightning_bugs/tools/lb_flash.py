@@ -274,6 +274,24 @@ def verify_connect(args, label: str) -> None:
         dev = lb_sync.Device(session.board.target)
         blk = dev.read_block()
         log(f"  [{label}] SWD ok, sync block at 0x{dev.addr:08x}, hold={blk.hold}")
+        return dev.header
+
+
+def check_running_build(running, expected, label: str) -> None:
+    """Fail unless the unit reports the firmware that was flashed (version, wire format, build ID, dirty flag).
+
+    `expected` is the header embedded in the flashed .bin (None if it has none: nothing to compare). Without
+    this, a flash that left the old firmware running would pass every reconnect check."""
+    if expected is None or running is None:
+        return
+    diffs = []
+    for what, got, want in (("firmware version", running.fw, expected.fw),
+                            ("wire format", (running.major, running.minor), (expected.major, expected.minor)),
+                            ("build", (running.build, running.dirty), (expected.build, expected.dirty))):
+        if got != want:
+            diffs.append(f"{what}: running {got}, flashed {want}")
+    if diffs:
+        raise Fail(f"[{label}] the unit is not running the build that was flashed ({'; '.join(diffs)})")
 
 
 def verify_retry(args, label: str, timeout: float) -> None:
@@ -287,6 +305,20 @@ def verify_retry(args, label: str, timeout: float) -> None:
             time.sleep(0.3)
 
 
+def check_bin_matches_source(binf: Path) -> None:
+    """`flash --bin` runs the source scan on the working tree, which says nothing about a binary built from
+    some other commit. Refuse a binary whose stamped commit is not the checked-out one."""
+    hdr, stamp = embedded_header(binf), build_stamp()
+    if hdr is None or hdr.legacy or stamp is None or not hdr.build:
+        return                                   # unstamped build or no git: nothing to compare
+    if hdr.build != stamp[0]:
+        raise Fail(f"{binf.name} was built from commit {hdr.build:08x}, but the checked-out source (which the safety "
+                   f"scan just read) is {stamp[0]:08x}: rebuild with `lb_flash.py build`, or check out that commit")
+    if hdr.dirty:
+        log(f"warning: {binf.name} was built from a tree with uncommitted changes; the source scan covers the "
+            "tree as it is now, which may differ")
+
+
 def cmd_flash(args) -> None:
     pyocd = shutil.which("pyocd")
     if not pyocd:
@@ -294,7 +326,9 @@ def cmd_flash(args) -> None:
     if args.bin:
         binf = Path(args.bin)
         cmd_check(args)
-        problems = check_binary(None, binf)
+        check_bin_matches_source(binf)
+        elf = binf.with_suffix(".elf")
+        problems = check_binary(elf if elf.exists() else None, binf)
         if problems:
             raise Fail("binary safety check failed: " + "; ".join(problems))
     else:
@@ -324,12 +358,14 @@ def cmd_flash(args) -> None:
     log("Resetting and verifying SWD stays reachable...")
     subprocess.run([pyocd, "reset", "-t", args.target, "-f", str(args.frequency), *probe, *NO_UNLOCK])
     time.sleep(0.5)
-    verify_retry(args, "boot guard", 5)           # guard holds the chip for 3 s
-    time.sleep(4)
-    verify_retry(args, "after guard", 5)
-    log("  waiting 30 s...")
-    time.sleep(30)
-    verify_retry(args, "after 30 s", 5)
+    expected = embedded_header(binf)
+    if expected is None:
+        log("warning: no sync-block header in the binary; cannot confirm the unit runs what was flashed")
+    for label, pause in (("boot guard", 0), ("after guard", 4), ("after 30 s", 30)):
+        if pause:
+            log(f"  waiting {pause} s...")
+            time.sleep(pause)
+        check_running_build(verify_retry(args, label, 5), expected, label)   # guard holds the chip for 3 s
 
     if args.canary:
         canary[digest] = {"time": time.strftime("%Y-%m-%dT%H:%M:%S"), "bin": binf.name}

@@ -232,3 +232,22 @@ def test_pick_model_defaults_to_the_first_and_rejects_unknown():
     assert lb_flash.pick_model(None) is lb_catalog.MODELS[0] and lb_catalog.MODELS[0].name == "pulsex"
     with pytest.raises(lb_flash.Fail, match="unknown model 'x'.*pulsex"):
         lb_flash.pick_model("x")
+
+
+# ─── check_running_build ─────────────────────────────────────────────────────
+def _hdr(**kw):
+    import lb_sync
+    return lb_sync.parse_header(_header_words(**kw))
+
+
+def test_running_build_matching_passes_and_none_is_skipped():
+    lb_flash.check_running_build(_hdr(), _hdr(), "x")
+    lb_flash.check_running_build(_hdr(), None, "x")          # a binary with no header: nothing to compare
+    lb_flash.check_running_build(None, _hdr(), "x")
+
+
+@pytest.mark.parametrize("kw, what", [({"build": 1}, "build"), ({"flags": 1}, "build"),
+                                      ({"fw": (0, 5, 0)}, "firmware version"), ({"fmt": (4, 1)}, "wire format")])
+def test_running_build_mismatch_fails_naming_what_differs(kw, what):
+    with pytest.raises(lb_flash.Fail, match=what):
+        lb_flash.check_running_build(_hdr(**kw), _hdr(), "after guard")
