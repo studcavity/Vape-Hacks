@@ -11,6 +11,7 @@ apt:
   - libusb-1.0-0      # pyocd's USB probe access (Pico/CMSIS-DAP)
   - shellcheck        # lint lightning_bugs/tools/setup.sh (CI does the same)
   - usbutils          # lsusb, to check which host USB devices the sandbox sees
+  - poppler-utils     # pdftotext, to search the large PY32F030 datasheet and reference manual PDFs
 
 # arduino-cli is intentionally NOT listed: lightning_bugs/tools/setup.sh installs it (pinned to 0.33.0,
 # checked against the release's published checksums) so that one script does the job both here and, with
@@ -26,10 +27,10 @@ setup:
     path: lightning_bugs/tools/setup.sh
     timeout: 1800
 
-last_generated: "2026-11-15T05:16:46Z"
+last_generated: "2026-11-19T03:11:17Z"
 platform: |
   Distributor ID:	Ubuntu
-  Description:	Ubuntu 24.04.5 LTS
-  Release:	24.04
-  Codename:	noble
+  Description:	Ubuntu 26.04.1 LTS
+  Release:	26.04
+  Codename:	resolute
   x86_64
