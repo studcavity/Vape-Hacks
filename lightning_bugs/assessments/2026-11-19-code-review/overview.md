@@ -3,14 +3,13 @@ type: Assessment
 title: Review overview
 description: What matters most in the Lightning Bugs code review, and what to do next.
 tags: [review,lightning-bugs]
-status: draft
 confidence: read-only except where a concept says confirmed
-generated: { by: claude-code/claude-sonnet-5-5, at: 2026-11-19T00:23:42Z }
+generated: { by: "claude-code/claude-sonnet-5-5", at: "2026-11-19T03:18:47Z" }
 sources:
-  - resource: ../../firmware/lightning_bugs/lightning_bugs.ino
-  - resource: ../../firmware/lightning_bugs/lb_sync.h
-  - resource: ../../host/lb_sync.py
-  - resource: ../../tools/lb_flash.py
+  - resource: https://github.com/studcavity/Vape-Hacks/blob/main/lightning_bugs/firmware/lightning_bugs/lightning_bugs.ino
+  - resource: https://github.com/studcavity/Vape-Hacks/blob/main/lightning_bugs/firmware/lightning_bugs/lb_sync.h
+  - resource: https://github.com/studcavity/Vape-Hacks/blob/main/lightning_bugs/host/lb_sync.py
+  - resource: https://github.com/studcavity/Vape-Hacks/blob/main/lightning_bugs/tools/lb_flash.py
 ---
 
 # Scope and method
@@ -27,7 +26,8 @@ All of `lightning_bugs/` was read: firmware (`lb_sync.h`, `lightning_bugs.ino`, 
 
 # Suggested next steps
 
-1. Fix the first, third, sixth and seventh defects (small, testable): [fallback grid](defect-resync-fallback-grid.md), [lit LEDs](defect-led-lit-after-resync.md), [auto_unlock](defect-flash-auto-unlock.md), [result check](defect-flash-no-result-check.md).
-2. Do the canary flash with the existing process. Do not use a sealed unit until STOP wake-up, SWD-after-sleep and idle current are answered on the canary ([hardware risks](risks-hardware.md)).
-3. Decide whether to build the watchdog and forced-reset mitigations, or drop STOP mode. Today the firmware does the thing the recovery plan was written to protect against, without its safety net.
-4. Address the remaining defects: [24.8-day wrap](defect-tick-wrap-24-days.md), [sleep on USB](defect-sleep-with-usb-present.md), [window syncs](defect-sync-ignored-in-window.md).
+Updated 2026-11-19 after re-checking the code. Four defects are fixed (resync fallback grid, lit LEDs after a resync, `auto_unlock`, post-flash result check). Still open:
+
+1. Do the canary flash with the existing process. Do not use a sealed unit until STOP wake-up, SWD-after-sleep and idle current are answered on the canary ([hardware risks](risks-hardware.md)).
+2. Decide whether to build the watchdog and forced-reset mitigations, or drop STOP mode. The firmware has no watchdog or SWD self-check (no `IWDG` or `lbSwdGuard` in the sources), yet it uses STOP.
+3. Fix the remaining defects: [24.8-day wrap](defect-tick-wrap-24-days.md), [sleep on USB](defect-sleep-with-usb-present.md), [window syncs](defect-sync-ignored-in-window.md).

@@ -5,12 +5,12 @@ description: Unverified assumptions in the firmware, namely power use, STOP wake
 tags: [firmware,hardware,power]
 status: draft
 confidence: unverified
-generated: { by: claude-code/claude-sonnet-5-5, at: 2026-11-19T00:23:42Z }
+generated: { by: "claude-code/claude-sonnet-5-5", at: "2026-11-19T00:23:42Z" }
 sources:
-  - resource: ../../firmware/lightning_bugs/lightning_bugs.ino
-  - resource: ../../firmware/lightning_bugs/lb_sync.h
-  - resource: ../2026-11-17-session-checkpoint.md
-  - resource: ../swd-recovery.md
+  - resource: https://github.com/studcavity/Vape-Hacks/blob/main/lightning_bugs/firmware/lightning_bugs/lightning_bugs.ino
+  - resource: https://github.com/studcavity/Vape-Hacks/blob/main/lightning_bugs/firmware/lightning_bugs/lb_sync.h
+  - resource: https://github.com/studcavity/Vape-Hacks/blob/main/lightning_bugs/assessments/2026-11-17-session-checkpoint.md
+  - resource: https://github.com/studcavity/Vape-Hacks/blob/main/lightning_bugs/assessments/swd-recovery.md
 ---
 
 # Debug bits survive resets

@@ -32,7 +32,7 @@ GND:   Pico GND -> USB-C A12 (B12 also GND)
 - **The unit sleeps and SWD is unavailable while it does.** The slide switch or plugging in a charger opens a short connect window; run `dump --poll` first, then move the switch.[^lb-readme]
 - Probe: a Raspberry Pi Pico running debug-probe (CMSIS-DAP) firmware, USB `2e8a:000c`, via pyocd; pick it with `--probe`/`-u`. Always take a flash backup first: `python3 tools/lb_flash.py -u <probe> dump`.
 
-Recovery planning for a unit that loses SWD is in [SWD recovery](../../lightning_bugs/assessments/swd-recovery.md); flashing in [Build and flash](build-and-flash.md).
+Recovery planning for a unit that loses SWD is in [SWD recovery plan](swd-recovery-plan.md) and [what can lose SWD](swd-loss-threats.md); flashing in [Build and flash](build-and-flash.md).
 
 [^lb-readme]: Lightning Bugs README (Debug probe and wiring section)
 [^upstream-readme]: Upstream project README

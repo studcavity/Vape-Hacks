@@ -32,7 +32,7 @@ deep-sleep bits, flash or option-byte access, RCC clock changes or DBGMCU (waive
 After flashing it resets the chip and re-attaches three times (in the guard, after it, 30 s later), and compares the
 unit's reported firmware version, wire format and build ID with the flashed `.bin`.[^lb-readme]
 
-Rationale and the loss-of-SWD threat list: [SWD recovery](../../lightning_bugs/assessments/swd-recovery.md). The
+Rationale and the loss-of-SWD threat list: [what can lose SWD](swd-loss-threats.md) and the [recovery plan](swd-recovery-plan.md). The
 register facts that assessment calls unverified (option bytes, debug-in-low-power bits) are not yet checked against
 the reference manual; findings so far are listed in [reading the PDFs](../references/pdf-sources.md). Wiring: [SWD wiring](swd-wiring.md).
 

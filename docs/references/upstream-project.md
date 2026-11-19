@@ -23,7 +23,7 @@ Sources the upstream README credits:[^upstream-readme]
 - r/streetlithium and the r/hardwarehacking "Geek Bar Pulse X screen reverse engineered" thread
 - `sm2013-vapehack/geekbar_pulse_x_screen_reuse` (display protocol)
 - `py32duino/Arduino-PY32` (the Arduino core), and `TDLOGY/py32f0-template-project`
-- `grahamwhaley/py32c642_vape`, covered in `lightning_bugs/assessments/py32c642-prior-art.md`
+- `grahamwhaley/py32c642_vape`, covered in [PY32C642 prior art](py32c642-prior-art.md)
 - Datasheet and reference manual from `download.py32.org`, stored in the folder as the two PDFs
 
 [^upstream-readme]: Upstream project README

@@ -5,11 +5,11 @@ description: Unpinned inputs to setup.sh, a heuristic safety scan, self-declared
 tags: [tooling,supply-chain]
 status: draft
 confidence: read from code
-generated: { by: claude-code/claude-sonnet-5-5, at: 2026-11-19T00:23:42Z }
+generated: { by: "claude-code/claude-sonnet-5-5", at: "2026-11-19T00:23:42Z" }
 sources:
-  - resource: ../../tools/setup.sh
-  - resource: ../../tools/lb_flash.py
-  - resource: ../../host/lb_sync.py
+  - resource: https://github.com/studcavity/Vape-Hacks/blob/main/lightning_bugs/tools/setup.sh
+  - resource: https://github.com/studcavity/Vape-Hacks/blob/main/lightning_bugs/tools/lb_flash.py
+  - resource: https://github.com/studcavity/Vape-Hacks/blob/main/lightning_bugs/host/lb_sync.py
 ---
 
 # Moving inputs

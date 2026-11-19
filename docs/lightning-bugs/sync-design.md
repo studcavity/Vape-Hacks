@@ -29,7 +29,7 @@ battery tens of ppm. Over 4 to 6 h "within a fraction of a second" is plausible 
 Next steps if drift is too large: calibrate under real conditions, add a periodic resync input (IR or light sensor), or fit a 32.768 kHz crystal.[^lb-readme]
 
 **Safety.** `lbBootGuard()` parks the firmware 3 s at power-up (a single halo LED spins). Anything that could cut off
-SWD must run after it; see [SWD recovery](../../lightning_bugs/assessments/swd-recovery.md). Hourly operation is in
+SWD must run after it; see [what can lose SWD](../tooling/swd-loss-threats.md). Hourly operation is in
 [Hourly resync](hourly-resync-and-log.md); layout of the sync block is in [Wire format](wire-format-and-compat.md).
 
 Status in the README: compiled and tested against a simulated device; **not yet run on hardware**.[^lb-readme]

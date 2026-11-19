@@ -3,12 +3,12 @@ type: Defect
 title: resync on a power-cycled unit silently loses the show schedule
 description: The fallback full sync takes the grid from a rebooted block, which holds the 0.5 s default, so the unit plays shows back-to-back.
 tags: [host,lb_sync,battery]
-status: draft
+status: deprecated
 confidence: confirmed in the simulator
-generated: { by: claude-code/claude-sonnet-5-5, at: 2026-11-19T00:23:42Z }
+generated: { by: "claude-code/claude-sonnet-5-5", at: "2026-11-19T03:18:47Z" }
 sources:
-  - resource: ../../host/lb_sync.py
-  - resource: ../../firmware/lightning_bugs/lb_sync.h
+  - resource: https://github.com/studcavity/Vape-Hacks/blob/main/lightning_bugs/host/lb_sync.py
+  - resource: https://github.com/studcavity/Vape-Hacks/blob/main/lightning_bugs/firmware/lightning_bugs/lb_sync.h
 ---
 
 # Problem
@@ -27,5 +27,7 @@ Reproduced: an unsynced simulated unit, `resync` with no grid arguments, ends wi
 - Always require `--every`, `--bpm` or `--period-ms` on fallback.
 
 # Resolution
+
+Status: **fixed**, so this concept is deprecated; it is kept as a record of the defect and its fix. Fix confirmed present in the code on 2026-11-19.
 
 Fixed on branch `sbx/jolly-shannon/02-review-doc-and-fixes`: `cmd_resync` now refuses the fallback with a message naming `--every`, `--bpm` and `--period-ms` when no host has written to the block since boot (`seq == 0`) and no grid is given. A unit woken from low-battery STOP keeps its grid. Tests: `ResyncTests.test_fallback_after_boot_refuses_to_guess_the_grid` and `test_fallback_after_sleep_wake_keeps_the_grid_it_still_holds`.

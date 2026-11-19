@@ -2,6 +2,7 @@
 
 * [Reading the two PDFs](pdf-sources.md) - How to search the PY32F030 datasheet and reference manual without reading them whole, and which of our docs came from them.
 * [Upstream project and prior art](upstream-project.md) - The original project folder, what it contains, the rule never to edit it, and the community sources it builds on.
+* [Prior art: PY32C642 in a Hayati Pro Ultra](py32c642-prior-art.md) - What another author learned probing a similar Puya vape over SWD from a Pico, and which of it may apply to us.
 
 ## PDF findings
 

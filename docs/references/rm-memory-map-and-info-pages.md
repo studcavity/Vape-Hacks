@@ -49,7 +49,7 @@ The two `TS_CAL` words are what the firmware's die-temperature reading is calibr
 [Temperature sensor](ds-temperature-sensor.md) for the sensor's own characteristics.
 
 Not yet read: option-byte bit layout (section 4.4), flash-protection and RDP behaviour, debug-in-low-power bits
-(`DBGMCU`). The [SWD recovery assessment](../../lightning_bugs/assessments/swd-recovery.md) lists these as
+(`DBGMCU`). The [SWD recovery plan](../tooling/swd-recovery-plan.md) lists these as
 still unverified.
 
 [^rm]: PY32F030 Reference Manual v1.3 (EN), 442 pages
