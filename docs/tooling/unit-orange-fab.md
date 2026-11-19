@@ -1,7 +1,7 @@
 ---
 type: Reference
 title: "Unit: orange fucking fab"
-description: "What we have observed about the unit nicknamed orange fucking fab: its SWD connect windows and DPIDR, and that no tool gates on the chip ID."
+description: "What we have observed about the canary unit nicknamed orange fucking fab: its DPIDR, SWD connect windows, flash dump hash, and that no tool gates on the chip ID."
 tags: [tooling, swd, unit]
 status: draft
 generated: { by: "claude-code/claude-sonnet-5-5", at: "2026-11-19T12:00:00Z" }
@@ -14,8 +14,8 @@ sources:
     title: Wiring a Pico debug probe to the unit over USB-C
 ---
 
-"orange fucking fab" is the name we use for one physical unit, so a note about it is not confused with the earlier unit we
-ran `watch` on. Everything here was observed on 2026-11-19 through the Pico probe wired as in [the wiring note](swd-wiring.md).
+"orange fucking fab" is the name we use for the **canary** unit, so a note about it is not confused with the earlier unit
+([Peach Jam](unit-peach-jam.md)). Everything here was observed on 2026-11-19 through the Pico probe wired as in [the wiring note](swd-wiring.md).
 The `watch` output was read from a terminal in the session and was not saved to a file.
 
 **Observed with `watch --timeout 90`** at 500 kHz, moving the slide switch during the run:[^flash-tool]
@@ -37,6 +37,15 @@ is the usual ID for a Cortex-M0+ and `0x0BB11477` for a plain Cortex-M0. Check i
 and that the output file does not exist yet.[^flash-tool] `watch` only prints the note above. So a different DPIDR does not stop a
 backup.
 
-**Not yet done on this unit:** a flash dump, and any reading of its option bytes. This note does not say whether it is the canary.
+**Flash dump** (2026-11-19, `dump --poll --timeout 60`, connected on attempt 234 after a switch move): 65536 bytes from
+`0x08000000`, two identical reads, SHA-256
+`d78f4a5bee8a927db42392f9d4626ef636b72787cd9a182b8703e461b562687c`. Saved on the sandbox as
+`lightning_bugs/backups/dump_20261119T054158_d78f4a5bee8a.bin` (git-ignored; copy kept by the user, not in the repo).[^flash-tool]
+This is the unit's original firmware, taken before any flashing. Its initial stack pointer (`0x20000A78`) and reset vector
+(`0x080000D9`) match [Peach Jam](unit-peach-jam.md)'s, but it is **not** the same image as the repository's upstream
+`backup_flash.bin`: 27,697 of 65,536 bytes differ (SHA-256 of that file `ca2460e4...fc35`), where Peach Jam's dump is recorded as differing from it
+in 5 bytes. So this unit runs a different firmware build from Peach Jam's.[^flash-tool]
+
+**Not yet done on this unit:** any reading of its option bytes (the option-byte findings in the repo are from Peach Jam's era, not this unit), and any flash.
 
 [^flash-tool]: lb_flash.py (watch and dump)
