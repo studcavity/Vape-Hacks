@@ -9,7 +9,7 @@
 #pragma once
 
 #define LB_FW_MAJOR 0
-#define LB_FW_MINOR 4
+#define LB_FW_MINOR 5
 #define LB_FW_PATCH 0
 #define LB_FW_VERSION ((uint32_t)((LB_FW_MAJOR << 16) | (LB_FW_MINOR << 8) | LB_FW_PATCH))
 

@@ -186,7 +186,8 @@ static void renderCometFrame(uint32_t k) {
 // Play the show that started at master time startUs. Returns false, without
 // blanking, if the host writes a new sync mid-show (the loop then re-reads the grid).
 static uint32_t seqAtStart;
-static bool sameSync() { return lbS.seq == seqAtStart && powerOk(); }
+// A switch move does not cut a show short (a jittery mid-rail PA2 must not break it): the loop acts on it after the show, within 5.85 s.
+static bool sameSync() { return lbS.seq == seqAtStart; }
 
 static bool playShow(int64_t startUs) {
     seqAtStart = lbS.seq;

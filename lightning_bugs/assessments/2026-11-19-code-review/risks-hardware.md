@@ -31,7 +31,7 @@ Nobody has confirmed that the clock and `millis()` rate are unchanged after a ST
 - The battery voltage derived from a nominal 1.2 V VREFINT is accurate (the header used to claim ±6 %; the datasheet says 1.17 to 1.23 V, about ±2.5 %, and the header was corrected on 2026-11-19).
 - `TS_CAL1` and `TS_CAL2` sit at the cited addresses.
 - `uwTick` is the counter behind `millis()`.
-- The LED driver accepts a frame immediately after `ledPower(true)` in `unsyncedBlink`, `lowBatteryBlink` and the mid-show join. Only the pre-show path has `LED_WAKE_LEAD_MS`.
+- The LED driver accepts a frame immediately after `ledPower(true)` in `unsyncedBlink` and the mid-show join (`lowBatteryBlink` was removed with the shelved low-battery sleep). Only the pre-show path has `LED_WAKE_LEAD_MS`.
 
 # No watchdog
 
