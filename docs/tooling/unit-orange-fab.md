@@ -28,10 +28,9 @@ The `watch` output was read from a terminal in the session and was not saved to 
 Between the windows the chip did not answer. A `dump --poll --timeout 60` run earlier, with nobody moving the switch, found
 no chip in 60 s (542 attempts), so on this unit a connect window follows a switch move and the dump has to be started first.
 
-**The DPIDR differs from what `watch` expects.** `lb_flash.py` compares against `0x0BB11477` and prints a note when it
-sees something else. That note is informational only. The earlier unit's DPIDR is not recorded anywhere in this repository, so
-whether the two units really differ, or the constant in the tool is wrong, is not settled. (Unsourced recollection: `0x0BC11477`
-is the usual ID for a Cortex-M0+ and `0x0BB11477` for a plain Cortex-M0. Check it against the Arm documentation before changing the constant.)
+**The DPIDR matches Peach Jam's.** Both units answer `0x0BC11477`, as read by `watch` on 2026-11-19 ([Peach Jam](unit-peach-jam.md)). `lb_flash.py`
+used to expect `0x0BB11477` and printed a note on every run; since both units agree, the constant was changed to `0x0BC11477`.[^flash-tool]
+(Unsourced recollection: `0x0BB11477` is the plain Cortex-M0 value; check against the Arm documentation if it matters.)
 
 **Nothing gates on the chip ID.** `dump` checks only that the reads agree, that the data is not all `0x00` or `0xFF`,
 and that the output file does not exist yet.[^flash-tool] `watch` only prints the note above. So a different DPIDR does not stop a

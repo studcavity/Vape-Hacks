@@ -440,7 +440,7 @@ def test_cli_dump_offers_poll(tree):
 # ─── watch ───────────────────────────────────────────────────────────────────
 class FakeProbe:
     """Answers (with `dpidr`) only while its clock is inside one of `windows`; every read costs 1 ms."""
-    def __init__(self, windows=(), dpidr=0x0BB11477, interrupt_at=None):
+    def __init__(self, windows=(), dpidr=0x0BC11477, interrupt_at=None):
         self.t, self.windows, self.dpidr, self.interrupt_at = 0.0, windows, dpidr, interrupt_at
 
     def swj_sequence(self, n, bits):
@@ -468,8 +468,8 @@ def test_watch_reports_no_window_when_the_chip_never_answers():
 def test_watch_measures_one_windows_start_length_and_dpidr():
     windows, lines = watch(FakeProbe(windows=[(0.200, 0.350)]))
     (w,) = windows
-    assert 140 <= w["ms"] <= 150 and w["dpidr"] == 0x0BB11477
-    assert any("DPIDR 0x0BB11477" in l and "answered at +0.2" in l for l in lines)
+    assert 140 <= w["ms"] <= 150 and w["dpidr"] == 0x0BC11477
+    assert any("DPIDR 0x0BC11477" in l and "answered at +0.2" in l for l in lines)
     assert "1 window(s), longest" in lines[-1]
 
 
@@ -479,7 +479,7 @@ def test_watch_counts_two_windows_separately():
 
 
 def test_watch_ignores_a_floating_line_and_junk_idcodes():
-    for junk in (0xFFFFFFFF, 0x00000000, 0x0BB11476):          # all ones; zero; bit 0 clear
+    for junk in (0xFFFFFFFF, 0x00000000, 0x0BC11476):          # all ones; zero; bit 0 clear
         windows, _ = watch(FakeProbe(windows=[(0.0, 5.0)], dpidr=junk))
         assert windows == [], hex(junk)
 

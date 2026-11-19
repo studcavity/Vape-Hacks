@@ -1,7 +1,7 @@
 ---
 type: Reference
 title: "Unit: Peach Jam"
-description: "The unit nicknamed Peach Jam, the first unit we dumped and probed: its flash dump hash and option bytes, and the open question whether it is the source of the other DPIDR."
+description: "The unit nicknamed Peach Jam, the first unit we dumped and probed: its flash dump hash and option bytes, its DPIDR and UID."
 tags: [tooling, swd, unit]
 status: draft
 generated: { by: "claude-code/claude-sonnet-5-5", at: "2026-11-19T12:30:00Z" }
@@ -26,10 +26,10 @@ upstream `backup_flash.bin` except 5 bytes at `0xF004` to `0xF011`.[^checkpoint]
 **Option bytes** (checkpoint, `options`, verified then): user word `0x0155FEAA` valid, RDP level 0, NRST is a GPIO, IWDG and
 WWDG are software, BOR off, no write protection.[^checkpoint]
 
-**DPIDR: not recorded.** Nobody wrote down the DPIDR that `watch` printed for this unit, and this repository does not hold
-it. The user suspects it is the other value that `lb_flash.py watch` prints a note about: the tool expects `0x0BB11477`,
-while [orange fucking fab](unit-orange-fab.md) answered with `0x0BC11477`.[^flash-tool] That is a hypothesis. To settle it, run `watch`
-on Peach Jam and record what it prints. The checkpoint says the `watch` numbers were not recorded. Nothing in `dump` depends on the answer.
+**DPIDR and UID** (2026-11-19, `watch --timeout 15`, two connect windows of 3.1 s and 8.6 s): DPIDR `0x0BC11477`, the same as
+[orange fucking fab](unit-orange-fab.md), so Peach Jam is not the source of a different value.[^flash-tool] Chip UID words
+`41503456 35333815 00b2e84c 47047c78`, which differ from orange's `35355041 18383439 54bdc600 78ad0547`. Which unit was wired was the user's word; the
+differing UID shows it was not orange. The 2026-11-17 checkpoint did not record the earlier `watch` numbers.
 
 The checkpoint also states that nothing had been flashed to it by 2026-11-17; whether it has been since is not recorded here.
 
