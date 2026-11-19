@@ -1,6 +1,22 @@
 # Vape-Hacks
 Hacking stupid "disposable" vapes to do fun things and not be e-waste.
 
+This is a fork of [SwiggityCricket/Vape-Hacks](https://github.com/SwiggityCricket/Vape-Hacks). The original
+project (custom firmware for the Geek Bar Pulse X Jam, PY32F030EK28) lives untouched in
+`PY32F030EK28 - Geek Bar Pulse X Jam/`. On top of it, **Lightning Bugs** (`lightning_bugs/`) syncs several units
+over SWD so they flash in time with one another.
+
+## Documentation
+
+Technical documentation is in [`docs/`](docs/index.md), one topic per file with source references:
+
+- [Hardware](docs/hardware/index.md): MCU, pin map, mode switch, power and charging
+- [Display](docs/display/index.md): the PLS916H SPI frame and LED layout
+- [Firmware](docs/firmware/index.md): stock firmware findings, battery measurement, upstream sketch
+- [Lightning Bugs](docs/lightning-bugs/index.md): sync design, wire format, power policy, hourly resync
+- [Tooling](docs/tooling/index.md): SWD wiring, build and flash, tests
+- [References](docs/references/index.md): upstream project, and findings recorded from the datasheet and reference manual PDFs
+
 ## Running the tests
 
 The tests need no hardware, no `pyocd` and no `arduino-cli`: device and toolchain are simulated or faked.
