@@ -37,6 +37,15 @@
 #define LB_WAKE_WINDOW_MS   60000u    // awake time after a wake, or after latching
 #define LB_MAX_SWITCH_TOGGLES 4u      // more switch edges than this in one window = chatter
 
+// The slide switch's "off" pole. Upstream reads PA2 with the ADC: position 1 (left) shorts it to GND, below
+// 20 counts of 4095, and the stock firmware treats that position as sleep. Anything else (VDDA above 2000,
+// or mid-rail) is "on". Taken from upstream's code and notes, not measured on this board: see
+// docs/hardware/mode-switch.md. A reading must hold for LB_SWITCH_OFF_CONFIRM samples before it counts.
+#define LB_SWITCH_OFF_ADC     20u     // PA2 ADC counts below this = switch at the off pole
+#define LB_SWITCH_OFF_CONFIRM 4u      // consecutive samples (5 ms apart) at the off pole
+
+static inline bool lbSwitchIsOff(uint32_t adc) { return adc < LB_SWITCH_OFF_ADC; }
+
 typedef struct {
     uint8_t  low_count;
     bool     latched;

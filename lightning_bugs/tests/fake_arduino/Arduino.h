@@ -38,11 +38,13 @@ struct Sim {
     int level[64] = {};
     void (*onWfi)() = nullptr;              // called after every simulated 1 ms tick
     unsigned long wfiCalls = 0;
+    unsigned long stopWfis = 0;             // WFIs entered with SLEEPDEEP set (STOP)
+    uint32_t pa2Adc = 1500;                 // what analogRead(PA2) returns: <20 GND, >2000 VDDA, else mid-rail
 };
 inline Sim sim;
 
 inline void tick() { uwTick = uwTick + 1; if (sim.onWfi) sim.onWfi(); }
-inline void __WFI() { tick(); }
+inline void __WFI() { if (scbRegs.SCR & SCB_SCR_SLEEPDEEP_Msk) sim.stopWfis++; tick(); }
 inline void __disable_irq() {}
 inline void __enable_irq() {}
 inline uint32_t millis() { return uwTick; }
@@ -55,4 +57,4 @@ inline int digitalPinToInterrupt(int pin) { return pin; }
 inline void attachInterrupt(int, void (*)(), int) {}
 inline void detachInterrupt(int) {}
 inline void analogReadResolution(int) {}
-inline uint32_t analogRead(uint32_t ch) { return ch == AVREF ? 1260 : 1500; }   // VREFINT 1.2 V -> supply 3.9 V
+inline uint32_t analogRead(uint32_t ch) { return ch == AVREF ? 1260 : ch == PA2 ? sim.pa2Adc : 1500; }   // VREFINT 1.2 V -> supply 3.9 V

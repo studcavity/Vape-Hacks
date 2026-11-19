@@ -28,3 +28,31 @@ def test_resync_that_cuts_a_show_short_leaves_the_leds_unpowered_until_the_next_
     assert show_run["show_cut_short"] == "1"
     assert int(show_run["wait_samples"]) > 3_000_000, "should have waited most of an hour"
     assert show_run["powered_while_waiting"] == "0"
+
+
+@pytest.fixture(scope="module")
+def switch_exe(tmp_path_factory):
+    d = tmp_path_factory.mktemp("switch")
+    exe = d / "switch"
+    subprocess.run([CXX, "-std=c++17", "-Wall", "-Wno-unused-function", "-I", str(LB / "tests" / "fake_arduino"),
+                    "-I", str(LB / "firmware" / "lightning_bugs"), str(LB / "tests" / "fake_arduino" / "switch_driver.cpp"),
+                    "-o", str(exe)], check=True)
+
+    def run(*args):
+        out = subprocess.run([str(exe), *args], capture_output=True, text=True, timeout=120)
+        assert out.returncode == 0, out.stdout + out.stderr
+        return dict(kv.split("=") for kv in out.stdout.split() if "=" in kv)
+    return run
+
+
+def test_switch_at_off_pole_sleeps_in_stop_until_it_moves(switch_exe):
+    r = switch_exe("off")
+    assert int(r["stop_wfis"]) >= 20000, "should have slept until the simulated switch move"
+    assert r["released"] == "1" and r["off_after"] == "0"
+    assert r["synced"] == "0" and r["wakes"] == "1", "STOP stops millis(): the unit must be unsynced after waking"
+    assert r["led_power_pin"] == "1", "LED driver power (PA15, HIGH = off) must be cut while asleep"
+
+
+def test_switch_not_at_off_pole_does_not_enter_stop(switch_exe):
+    r = switch_exe()
+    assert r["stop_wfis"] == "0" and r["released"] == "0"

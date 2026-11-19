@@ -152,3 +152,11 @@ def test_accidental_wakes_are_cheap():
     per_wake_mah = idle_ma * window_s / 3600
     assert per_wake_mah == pytest.approx(0.00667, rel=0.01)
     assert 100 * per_wake_mah < 0.001 * capacity_mah       # a hundred accidental wakes < 0.1 % of the cell
+
+
+def test_switch_off_pole_is_adc_below_20_only(tmp_path):
+    src = tmp_path / "t.c"
+    src.write_text('#include "lb_power_policy.h"\nint main(void) { return lbSwitchIsOff(0) && lbSwitchIsOff(19) '
+                   '&& !lbSwitchIsOff(20) && !lbSwitchIsOff(1500) && !lbSwitchIsOff(4095) ? 0 : 1; }\n')
+    subprocess.run([CC, "-std=c11", "-Wall", "-Werror", "-I", str(FW), str(src), "-o", str(tmp_path / "t")], check=True)
+    assert subprocess.run([str(tmp_path / "t")]).returncode == 0
